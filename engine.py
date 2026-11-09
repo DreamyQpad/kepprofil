@@ -2,7 +2,7 @@
 import threading
 import time
 
-from config import _write_json, load_config, load_settings, night_mult, pgain, pvals
+from config import _write_json, load_config, load_settings, night_mult, pgain, pvals, write_log
 from consts import CONFIG_FILE, NEUTRAL, SETTINGS_FILE
 from hw import Nv, Rgb, build_ramp, find_dev, get_ramp, power_active, power_set, set_ramp
 
@@ -37,6 +37,7 @@ class Engine:
     def say(self, text):
         self.log.append((time.strftime("%H:%M:%S"), text))
         del self.log[:-50]
+        write_log(text)
         self.notify()
 
     def save_config(self):

@@ -1,15 +1,18 @@
 """A felület: tálcaikon, panel, toast, és a motor/gyorsgombok összekötése (run_app)."""
 import ctypes
 import json
+import os
 import queue
 import re
+import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 
-from config import (BACKUP_DIR, SETTINGS_KEYS, _read_json, _write_json, auto_backup, mirror_first, new_preset,
+from config import (BACKUP_DIR, write_log, SETTINGS_KEYS, _read_json, _write_json, auto_backup, mirror_first, new_preset,
                     normalize_config, pgain, pvals, valid_config)
-from consts import APP_NAME, DATA_DIR, NEUTRAL, RES_DIR
+from consts import APP_NAME, DATA_DIR, LOG_FILE, NEUTRAL, RES_DIR, VERSION
 from engine import Engine
 from hw import Hotkeys, SystemEvents, find_dev, kernel32, monitor_rect, parse_hotkey, power_plans, user32
 from system import (autostart_enabled, kill_old_watcher, set_autostart, single_instance, visible_programs)
@@ -55,6 +58,14 @@ def run_app(start_hidden):
         eng.set["migrated"] = True
         eng.save_settings()
     eng.save_config()
+
+    def log_exception(where, et, ev, tb):
+        write_log(f"Kezeletlen hiba ({where}):\n" + "".join(traceback.format_exception(et, ev, tb)))
+
+    sys.excepthook = lambda et, ev, tb: log_exception("főszál", et, ev, tb)
+    threading.excepthook = lambda a: log_exception(f"szál: {a.thread.name if a.thread else '?'}", a.exc_type, a.exc_value,
+                                                   a.exc_traceback)
+    eng.say(f"Indul: {APP_NAME} {VERSION}")
     hk = Hotkeys(lambda action: q.put(("hk", action)))
     hk.start()
     sysev = SystemEvents(eng.system_event)         # ébredés / kijelzőváltás után a kép visszaállítása
@@ -63,6 +74,7 @@ def run_app(start_hidden):
     ctk.set_appearance_mode("system")
     ctk.set_default_color_theme("blue")
     root = ctk.CTk()
+    root.report_callback_exception = lambda et, ev, tb: log_exception("felület", et, ev, tb)
     root.title(APP_NAME)
     root.geometry("620x920")
     root.minsize(580, 760)
@@ -394,6 +406,11 @@ def run_app(start_hidden):
     ctk.CTkLabel(t4, text=f"Az összes preset és beállítás egy fájlba. A program naponta egyszer maga is másolatot készít "
                           f"(utolsó 10 marad): {BACKUP_DIR}", text_color=MUTED, wraplength=520, justify="left").pack(
         anchor="w", pady=(6, 0))
+    lg = ctk.CTkFrame(t4, fg_color="transparent")
+    lg.pack(fill="x", pady=(14, 0))
+    ctk.CTkButton(lg, text="Napló megnyitása", width=140, command=lambda: open_path(LOG_FILE), **GREY).pack(side="left")
+    ctk.CTkButton(lg, text="Adatmappa megnyitása", width=160, command=lambda: open_path(DATA_DIR), **GREY).pack(
+        side="left", padx=(8, 0))
     ui["info"] = ctk.CTkLabel(t4, text="", text_color=MUTED, wraplength=520, justify="left")
     ui["info"].pack(anchor="w", pady=(14, 0))
 
@@ -886,6 +903,15 @@ def run_app(start_hidden):
         if key.endswith("hotkey"):
             apply_hotkeys()
 
+    def open_path(p):
+        try:
+            if not p.exists() and p.suffix:
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.touch()
+            os.startfile(str(p))
+        except OSError as e:
+            status(f"Nem sikerült megnyitni: {e.__class__.__name__}")
+
     def auto_click():
         set_autostart(bool(ui["auto"].get()))
 
@@ -1033,7 +1059,7 @@ def run_app(start_hidden):
     def sync_info():
         nv = "NVIDIA vibrance elérhető" if eng.nv.ok else "NVIDIA vibrance nem elérhető (nincs NVIDIA driver)"
         failed = [a for a in hk.failed]
-        ui["info"].configure(text=f"{nv}. Adatok: {DATA_DIR}" + (
+        ui["info"].configure(text=f"{APP_NAME} {VERSION}. {nv}. Adatok: {DATA_DIR}" + (
             f"\nFoglalt gyorsgomb(ok): {', '.join(failed)}" if failed else ""))
         ui["auto"].select() if autostart_enabled() else ui["auto"].deselect()
 

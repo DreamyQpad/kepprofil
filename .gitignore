@@ -8,3 +8,5 @@ out/
 backup/
 presets.json
 settings.json
+log.txt
+log.old.txt

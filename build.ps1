@@ -20,7 +20,8 @@ if ($LASTEXITCODE -ne 0) { throw "PyInstaller hiba, lasd: $b\pyinstaller.log" }
 
 if (-not (Test-Path $iscc)) { throw 'Nincs Inno Setup: winget install --id JRSoftware.InnoSetup' }
 Set-Location $b
-& $iscc /Q "$b\telepito.iss"
+$ver = (Select-String -Path "$root\consts.py" -Pattern '^VERSION = "(.+?)"').Matches[0].Groups[1].Value
+& $iscc /Q "/DAppVersion=$ver" "$b\telepito.iss"
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup hiba" }
 # mindig keszul egy masolat a Dokumentumok\telepitok mappaba is
 $docs = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'telepitok'

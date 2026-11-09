@@ -1,9 +1,10 @@
 """Beállítások és preset-konfiguráció: betöltés, mentés, ellenőrzés, segédek."""
 import json
 import shutil
+import threading
 import time
 
-from consts import CONFIG_FILE, DATA_DIR, NEUTRAL, OLD_DIR, SETTINGS_FILE
+from consts import CONFIG_FILE, DATA_DIR, LOG_FILE, NEUTRAL, OLD_DIR, SETTINGS_FILE
 from hw import list_monitors
 
 # ---------------------------------------------------------------- beállítások, konfig
@@ -19,6 +20,23 @@ def _write_json(path, data):
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data, ensure_ascii=False, indent=4), encoding="utf-8")
+    except OSError:
+        pass
+
+
+_log_lock = threading.Lock()
+LOG_MAX = 256 * 1024                              # ennél nagyobb naplót log.old.txt-re cseréli (így legfeljebb ~512 kB)
+
+
+def write_log(text):
+    """Egy sor a log.txt-be (időbélyeggel). Hiba esetén csendben eldobja: a napló sosem akaszthatja meg a programot."""
+    try:
+        with _log_lock:
+            LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            if LOG_FILE.exists() and LOG_FILE.stat().st_size > LOG_MAX:
+                LOG_FILE.replace(LOG_FILE.with_suffix(".old.txt"))
+            with LOG_FILE.open("a", encoding="utf-8") as f:
+                f.write(time.strftime("%Y-%m-%d %H:%M:%S  ") + str(text).rstrip() + "\n")
     except OSError:
         pass
 

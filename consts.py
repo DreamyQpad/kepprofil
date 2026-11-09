@@ -6,6 +6,7 @@ from pathlib import Path
 
 FROZEN = getattr(sys, "frozen", False)
 APP_NAME = "Képprofil"
+VERSION = "2.3"                      # a build.ps1 innen veszi a telepítő verzióját
 OLD_APP_NAME = "Kijelző"             # az előző név: adatmappa és parancsikon átvétele
 HERE = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent
 RES_DIR = Path(getattr(sys, "_MEIPASS", HERE))
@@ -20,6 +21,7 @@ if FROZEN and not DATA_DIR.exists():                                  # első in
             pass
 CONFIG_FILE = DATA_DIR / "presets.json"
 SETTINGS_FILE = DATA_DIR / "settings.json"
+LOG_FILE = DATA_DIR / "log.txt"
 OLD_DIR = Path.home() / "Tools" / "display-presets"          # az előző (PowerShell-es) változat helye
 STARTUP_DIR = Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
 CREATE_NO_WINDOW = 0x08000000

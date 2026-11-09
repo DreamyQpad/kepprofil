@@ -2,7 +2,10 @@
 ; Előfeltétel: build_installer\dist\Kepprofil\ kész (PyInstaller).
 
 #define AppName "Képprofil"
-#define AppVersion "2.2"
+; a build.ps1 a consts.py VERSION-jét adja át (/DAppVersion=)
+#ifndef AppVersion
+  #define AppVersion "2.3"
+#endif
 #define AppExe "Kepprofil.exe"
 ; az előző név ("Kijelző") telepítőjének AppId-ja: azt telepítés előtt eltávolítjuk
 #define OldAppId "{B3F1C2A4-6D5E-4F7A-8C91-2E4D7A9B1C30}"
