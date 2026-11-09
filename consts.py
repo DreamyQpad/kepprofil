@@ -6,13 +6,16 @@ from pathlib import Path
 
 FROZEN = getattr(sys, "frozen", False)
 APP_NAME = "Képprofil"
-VERSION = "2.4"                      # a build.ps1 innen veszi a telepítő verzióját
+VERSION = "2.5"                      # a build.ps1 innen veszi a telepítő verzióját
 OLD_APP_NAME = "Kijelző"             # az előző név: adatmappa és parancsikon átvétele
 HERE = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent
 RES_DIR = Path(getattr(sys, "_MEIPASS", HERE))
 USE_APPDATA = FROZEN or "--appdata" in sys.argv                       # --appdata: forrásból futtatva is a telepített adatok (teszt-ikon)
-DATA_DIR = (Path(os.environ.get("APPDATA", str(HERE))) / APP_NAME) if USE_APPDATA else HERE
-if FROZEN and not DATA_DIR.exists():                                  # első indítás az új név alatt
+if sys.platform == "win32":
+    DATA_DIR = (Path(os.environ.get("APPDATA", str(HERE))) / APP_NAME) if USE_APPDATA else HERE
+else:                                                                 # Linux: XDG-konfigmappa
+    DATA_DIR = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "kepprofil"
+if sys.platform == "win32" and FROZEN and not DATA_DIR.exists():                                  # első indítás az új név alatt
     _old_data = DATA_DIR.parent / OLD_APP_NAME
     if _old_data.is_dir():
         try:

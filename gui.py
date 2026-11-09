@@ -78,7 +78,7 @@ def run_app(start_hidden):
     root.geometry("620x920")
     root.minsize(580, 760)
     ico = RES_DIR / "assets" / "icon.ico"
-    if ico.is_file():
+    if ico.is_file() and sys.platform == "win32":
         root.after(300, lambda: root.iconbitmap(str(ico)))
     MUTED = ("gray40", "gray60")
     GREY = dict(fg_color=("gray75", "gray30"), hover_color=("gray65", "gray40"), text_color=("gray10", "gray90"))
