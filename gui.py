@@ -1,7 +1,5 @@
 """A felület: tálcaikon, panel, toast, és a motor/gyorsgombok összekötése (run_app)."""
-import ctypes
 import json
-import os
 import queue
 import re
 import sys
@@ -14,8 +12,9 @@ from config import (BACKUP_DIR, write_log, SETTINGS_KEYS, _read_json, _write_jso
                     normalize_config, pgain, pvals, valid_config)
 from consts import APP_NAME, DATA_DIR, LOG_FILE, NEUTRAL, RES_DIR, VERSION
 from engine import Engine
-from hw import Hotkeys, SystemEvents, find_dev, kernel32, monitor_rect, parse_hotkey, power_plans, user32
-from system import (autostart_enabled, kill_old_watcher, set_autostart, single_instance, visible_programs)
+from hw import Hotkeys, SystemEvents, find_dev, monitor_rect, overlay_style, parse_hotkey, power_plans
+from system import (autostart_enabled, kill_old_watcher, open_native, set_autostart, signal_running, single_instance,
+                    visible_programs, show_signaled)
 
 HOOK = {}                                         # tesztek: a futó felület elemei (run_app tölti fel)
 
@@ -45,7 +44,7 @@ def run_app(start_hidden):
 
     already, show_ev = single_instance()
     if already:
-        kernel32.SetEvent(show_ev)
+        signal_running(show_ev)
         return
 
     q = queue.Queue()
@@ -908,7 +907,7 @@ def run_app(start_hidden):
             if not p.exists() and p.suffix:
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.touch()
-            os.startfile(str(p))
+            open_native(p)
         except OSError as e:
             status(f"Nem sikerült megnyitni: {e.__class__.__name__}")
 
@@ -947,10 +946,7 @@ def run_app(start_hidden):
         w.deiconify()
         w.update_idletasks()
         try:                                                  # átkattintható, nem aktiválódik, nincs tálcagomb
-            hwnd = user32.GetParent(w.winfo_id()) or w.winfo_id()
-            ex = user32.GetWindowLongW(hwnd, -20)
-            user32.SetWindowLongW(hwnd, -20, ex | 0x00080000 | 0x00000020 | 0x08000000 | 0x00000080)
-            user32.SetWindowPos(hwnd, ctypes.c_void_p(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | 0x0040)   # TOPMOST, aktiválás nélkül
+            overlay_style(w)
         except Exception:
             pass
 
@@ -1057,7 +1053,7 @@ def run_app(start_hidden):
     root.protocol("WM_DELETE_WINDOW", request_close)
 
     def sync_info():
-        nv = "NVIDIA vibrance elérhető" if eng.nv.ok else "NVIDIA vibrance nem elérhető (nincs NVIDIA driver)"
+        nv = "NVIDIA vibrance elérhető" if eng.display.vibrance_ok else "NVIDIA vibrance nem elérhető (nincs NVIDIA driver)"
         failed = [a for a in hk.failed]
         ui["info"].configure(text=f"{APP_NAME} {VERSION}. {nv}. Adatok: {DATA_DIR}" + (
             f"\nFoglalt gyorsgomb(ok): {', '.join(failed)}" if failed else ""))
@@ -1132,7 +1128,7 @@ def run_app(start_hidden):
 
     def wait_show():
         while not eng.stop:
-            if kernel32.WaitForSingleObject(show_ev, 1000) == 0:      # a második indítás jelzett
+            if show_signaled(show_ev, 1000):                              # a második indítás jelzett
                 q.put(("panel",))
 
     threading.Thread(target=wait_show, daemon=True).start()

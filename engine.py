@@ -4,7 +4,7 @@ import time
 
 from config import _write_json, load_config, load_settings, night_mult, pgain, pvals, write_log
 from consts import CONFIG_FILE, NEUTRAL, SETTINGS_FILE
-from hw import Nv, Rgb, build_ramp, find_dev, get_ramp, power_active, power_set, set_ramp
+from hw import Display, Rgb, find_dev, power_active, power_set
 
 
 class Engine:
@@ -12,7 +12,7 @@ class Engine:
         self.lock = threading.RLock()
         self.cfg, self.set = load_config(), load_settings()
         self.notify = notify
-        self.nv = Nv()
+        self.display = Display()
         self.rgb = Rgb()
         self.active = {}            # monitor-azonosító -> bekapcsolt preset neve
         self.manual_off = set()     # (monitor, preset): kézzel kikapcsolva, amíg a játék fut
@@ -89,9 +89,8 @@ class Engine:
         dev = find_dev(mid)
         if not dev:
             return False
-        g, c, b, v = vals
         with self.lock:
-            return set_ramp(dev, build_ramp(g, c, b, mult)) and self.nv.set(dev, v)
+            return self.display.apply(dev, vals, mult)
 
     def sync(self, mid=None):
         """A kijelzőt az aktuális állapotra (bekapcsolt preset + éjszakai mód) állítja."""
@@ -288,14 +287,9 @@ class Engine:
         if vals == NEUTRAL and mult == (1.0, 1.0, 1.0):
             return                                             # semleges állapotban nem nyúlunk bele
         dev = find_dev(mid)
-        now = get_ramp(dev) if dev else None
-        if not now:
+        if not dev:
             return
-        want = build_ramp(vals[0], vals[1], vals[2], mult)
-        bad = any(abs(now[ch * 256 + i] - want[ch * 256 + i]) > 8 for ch in range(3) for i in (64, 128, 192))
-        if not bad and self.nv.ok:
-            bad = self.nv.get(dev) not in (-1, int(vals[3]))
-        if bad:
+        if self.display.drifted(dev, vals, mult):
             self.apply_display(mid, vals, mult)
             self.say(f"{self.mon(mid)['name']}: a beállítást visszaállítottam ({why})")
             return True

@@ -6,7 +6,7 @@ from pathlib import Path
 
 FROZEN = getattr(sys, "frozen", False)
 APP_NAME = "Képprofil"
-VERSION = "2.3"                      # a build.ps1 innen veszi a telepítő verzióját
+VERSION = "2.4"                      # a build.ps1 innen veszi a telepítő verzióját
 OLD_APP_NAME = "Kijelző"             # az előző név: adatmappa és parancsikon átvétele
 HERE = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent
 RES_DIR = Path(getattr(sys, "_MEIPASS", HERE))
