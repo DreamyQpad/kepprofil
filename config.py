@@ -114,11 +114,21 @@ def normalize_config(cfg):
         mon.setdefault("presets", {})
         mon["presets"].setdefault("Alap", new_preset())
         # a régi változat PowerShell-objektumként mentett mezői is egyszerű dict-ek
+    add_new_monitors(cfg, list_monitors())
+    return cfg
+
+
+def add_new_monitors(cfg, found):
+    """A found (list_monitors() formátum) listában szereplő, de a cfg-ben még nem ismert monitorok felvétele
+    egy „Alap" presettel. Igaz, ha bővült a cfg."""
     known = {m["id"].lower() for m in cfg["monitors"]}
-    for m in list_monitors():                                        # újonnan csatlakoztatott monitor
+    added = False
+    for m in found:
         if m["id"].lower() not in known:
             cfg["monitors"].append({"id": m["id"], "name": f"Monitor {m['id']}", "presets": {"Alap": new_preset()}})
-    return cfg
+            known.add(m["id"].lower())
+            added = True
+    return added
 
 
 def pvals(p, vname=None):

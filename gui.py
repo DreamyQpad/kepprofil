@@ -79,6 +79,7 @@ def run_app(start_hidden):
     auto_backup()                                   # még azelőtt, hogy az indulás bármit újraírna
     eng = Engine(notify=lambda: q.put(("refresh",)))
     eng.toast_cb = lambda text, mid: q.put(("toast", text, mid))
+    eng.monitors_cb = lambda: q.put(("monitors",))
     first_run = not eng.set.get("migrated")
     if first_run:
         kill_old_watcher()
@@ -227,7 +228,7 @@ def run_app(start_hidden):
     page.pack(fill="both", expand=True, padx=18, pady=14)
     top = ctk.CTkFrame(page, corner_radius=12)
     top.pack(fill="x")
-    ui["mon"] = ctk.CTkSegmentedButton(top, values=[m["name"] for m in eng.cfg["monitors"]], command=lambda v: pick_monitor(v, ask=True))
+    ui["mon"] = ctk.CTkSegmentedButton(top, values=[m["name"] for m in eng.mons()], command=lambda v: pick_monitor(v, ask=True))
     ui["mon"].pack(fill="x", padx=14, pady=(12, 8))
     pr_ = ctk.CTkFrame(top, fg_color="transparent")               # "Alkalmazás:" felirat + választó, középen
     pr_.pack(pady=(6, 0))
@@ -470,7 +471,7 @@ def run_app(start_hidden):
         ui["status"].configure(text=text)
 
     def mon_by_name(name):
-        return next((m for m in eng.cfg["monitors"] if m["name"] == name), eng.cfg["monitors"][0])
+        return next((m for m in eng.mons() if m["name"] == name), eng.mons()[0])
 
     # A gamma-csúszka az NVIDIA-panel skáláján megy (1,00 = semleges); a mentett/belső érték marad a régi
     # (2,2 = semleges), így a meglévő presetek nem változnak: belső = csúszka * 2,2.
@@ -852,7 +853,7 @@ def run_app(start_hidden):
             eng.migrate_cycle_hotkey()
             eng.save_config()
             eng.save_settings()
-        ui["mon"].configure(values=[m["name"] for m in eng.cfg["monitors"]])
+        ui["mon"].configure(values=[m["name"] for m in eng.mons()])
         ui["ns"][0].set(eng.set["night_strength"])
         eng.set_night_strength(eng.set["night_strength"])
         ui["nhk"].set(eng.set.get("night_hotkey", ""))
@@ -863,7 +864,7 @@ def run_app(start_hidden):
         ui["toast"].select() if eng.set.get("toast", True) else ui["toast"].deselect()
         apply_hotkeys()
         eng.sync()
-        pick_monitor(eng.cfg["monitors"][0]["name"])
+        pick_monitor(eng.mons()[0]["name"])
         refresh_tray()
         status("Importálva: a presetek és beállítások betöltve.")
 
@@ -952,7 +953,7 @@ def run_app(start_hidden):
         lst.pack(fill="both", expand=True, padx=16, pady=(0, 14))
         rows = [("Éjszakai mód (minden monitor)", "night"), ("Semleges kép (minden kikapcsol)", "neutral")]
         rows.append(("Következő változat (az aktív játéknál, minden monitoron)", "cycle"))
-        for m in eng.cfg["monitors"]:
+        for m in eng.mons():
             for name, p in m["presets"].items():
                 rows.append((f"{m['name']} – {name}", build_action("preset", m["id"], name)))
                 if p.get("variants"):
@@ -1108,9 +1109,7 @@ def run_app(start_hidden):
 
         items = [pystray.MenuItem("Panel megnyitása", lambda icon, item: q.put(("panel",)), default=True),
                  pystray.Menu.SEPARATOR]
-        for m in eng.cfg["monitors"]:
-            if not find_dev(m["id"]):
-                continue
+        for m in eng.mons():
             items.append(pystray.MenuItem(m["name"], lambda icon, item: None, enabled=False))
             for name, p in m["presets"].items():
                 items.append(pystray.MenuItem(name + (f"   ({p['hotkey']})" if p.get("hotkey") else ""),
@@ -1167,6 +1166,19 @@ def run_app(start_hidden):
             f"\nFoglalt gyorsgomb(ok): {', '.join(failed)}" if failed else ""))
         ui["auto"].select() if autostart_enabled() else ui["auto"].deselect()
 
+    def on_monitors():
+        """Monitor került a gépre / lekerült róla: a választó, a gyorsgombok és a tálcamenü is csak a csatlakoztatottakat mutatja."""
+        mons = eng.mons()
+        ui["mon"].configure(values=[m["name"] for m in mons])
+        here = next((m for m in mons if m["id"] == cur["mid"]), None)
+        if here:
+            ui["mon"].set(here["name"])                       # a values átírása a kijelölést elveszi
+        elif mons:
+            pick_monitor(mons[0]["name"])                     # az épp szerkesztett monitor lekerült: a mentetlen módosítás elvész
+        apply_hotkeys()
+        refresh_tray()
+        status(f"Monitorok: {', '.join(m['name'] for m in mons)}")
+
     def pump():
         try:
             while True:
@@ -1191,6 +1203,8 @@ def run_app(start_hidden):
                         overlay.key(m[1])
                     else:
                         eng.run_action(m[1])
+                elif k == "monitors":
+                    on_monitors()
                 elif k == "refresh":
                     refresh_tray()
                     if root.state() != "withdrawn":
@@ -1229,7 +1243,7 @@ def run_app(start_hidden):
     ui["ovhk"].set(eng.set.get("overlay_hotkey", ""))
     ui["base"].set(eng.set.get("base_rgb"))
     ui["toast"].select() if eng.set.get("toast", True) else ui["toast"].deselect()
-    pick_monitor(eng.cfg["monitors"][0]["name"] if eng.cfg["monitors"] else "")
+    pick_monitor(eng.mons()[0]["name"] if eng.mons() else "")
     poll_dirty()
     eng.sync()                         # induláskor ismert (semleges) állapot
     threading.Thread(target=eng.fx_loop, daemon=True).start()

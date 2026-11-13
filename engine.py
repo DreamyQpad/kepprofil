@@ -2,9 +2,9 @@
 import threading
 import time
 
-from config import _write_json, load_config, load_settings, mirror_first, night_mult, pgain, pvals, write_log
+from config import _write_json, add_new_monitors, load_config, load_settings, mirror_first, night_mult, pgain, pvals, write_log
 from consts import CONFIG_FILE, NEUTRAL, SETTINGS_FILE
-from hw import Display, Rgb, find_dev, power_active, power_set
+from hw import Display, Rgb, find_dev, list_monitors, power_active, power_set
 
 
 class Engine:
@@ -19,6 +19,9 @@ class Engine:
         self.auto = set()           # (monitor, preset): a játék indította; a játék kilépésekor kikapcsol
         self.variant = {}           # (monitor, preset) -> érvényes változat neve (futásidejű; hiányában az első)
         self.toast_cb = lambda text, mid: None      # a GUI állítja be: képernyő-értesítés
+        self.monitors_cb = lambda: None             # a GUI állítja be: a csatlakoztatott monitorok köre változott
+        self.connected = set()      # a most csatlakoztatott monitorok azonosítója (kisbetűvel); üres: a detektálás nem ment
+        self.monitors_t = 0.0
         self.night_mons = set()     # azok a monitorok (azonosító), ahol az éjszakai mód be van kapcsolva
         self.panel_open = False
         self.hold = False           # összehasonlítás: nyomva tartva a semleges kép látszik
@@ -32,6 +35,7 @@ class Engine:
         self.stop = False
         self.reapplied_t = 0.0
         self.migrate_cycle_hotkey()
+        self.refresh_monitors(initial=True)
         self.refresh_running()
 
     def migrate_cycle_hotkey(self):
@@ -63,6 +67,37 @@ class Engine:
 
     def mon(self, mid):
         return next((m for m in self.cfg["monitors"] if m["id"] == mid), None)
+
+    def mons(self):
+        """A most csatlakoztatott monitorok (a cfg-beli bejegyzések). A lecsatlakoztatott monitor presetjei a cfg-ben
+        megmaradnak, de sehol nem jelennek meg és nem működnek. Ha a detektálás nem adott eredményt, az összes."""
+        if not self.connected:
+            return list(self.cfg["monitors"])
+        return [m for m in self.cfg["monitors"] if m["id"].lower() in self.connected]
+
+    def refresh_monitors(self, initial=False):
+        """Újraolvassa, mely monitorok vannak csatlakoztatva: az újakat felveszi (Alap presettel), a lecsatlakoztatottak
+        bekapcsolt állapotát eldobja. Igaz, ha változott a csatlakoztatott monitorok köre."""
+        self.monitors_t = time.time()
+        found = list_monitors()
+        if not found:                                           # átmeneti üres lista: ne ürítsük ki a felületet
+            return False
+        ids = {m["id"].lower() for m in found}
+        with self.lock:
+            changed = ids != self.connected
+            if add_new_monitors(self.cfg, found) and not initial:
+                self.save_config()
+            gone = self.connected - ids
+            self.connected = ids
+            for mid in [k for k in self.active if k.lower() in gone]:
+                name = self.active.pop(mid)
+                self.auto.discard((mid, name))
+            self.night_mons -= {k for k in self.night_mons if k.lower() in gone}
+        if changed and not initial:
+            names = ", ".join(m["name"] for m in self.mons())
+            self.say(f"Monitorok változtak: {names}")
+            self.monitors_cb()
+        return changed
 
     def preset(self, mid, name):
         m = self.mon(mid)
@@ -110,7 +145,7 @@ class Engine:
     def sync(self, mid=None):
         """A kijelzőt az aktuális állapotra (bekapcsolt preset + éjszakai mód) állítja."""
         ok = True
-        for m in self.cfg["monitors"]:
+        for m in self.mons():
             if mid is None or m["id"] == mid:
                 ok = self.apply_display(m["id"], *self.target(m["id"])) and ok
         self.fx_wake.set()
@@ -199,7 +234,7 @@ class Engine:
         """A globális léptető gomb: minden monitoron a most aktív preset következő változatára lép
         (csak azon, amelyiknek vannak változatai); ha nincs ilyen, jelzi."""
         with self.lock:
-            targets = [(m["id"], self.active[m["id"]]) for m in self.cfg["monitors"]
+            targets = [(m["id"], self.active[m["id"]]) for m in self.mons()
                        if m["id"] in self.active and (self.preset(m["id"], self.active[m["id"]]) or {}).get("variants")]
         if not targets:
             self.toast("Nincs aktív preset változatokkal")
@@ -214,7 +249,7 @@ class Engine:
         with self.lock:
             if fg_mid in self.active and self.preset(fg_mid, self.active[fg_mid]) is not None:
                 return fg_mid, self.active[fg_mid]
-            return next(((m["id"], self.active[m["id"]]) for m in self.cfg["monitors"]
+            return next(((m["id"], self.active[m["id"]]) for m in self.mons()
                          if m["id"] in self.active and self.preset(m["id"], self.active[m["id"]]) is not None), None)
 
     @staticmethod
@@ -256,7 +291,7 @@ class Engine:
                 targets, on = [mid], mid not in self.night_mons
                 label = (self.mon(mid) or {}).get("name", mid)
             else:
-                targets = [m["id"] for m in self.cfg["monitors"] if find_dev(m["id"])]
+                targets = [m["id"] for m in self.mons()]
                 on, label = not self.night_mons, "minden monitor"
             for t in targets:
                 (self.night_mons.add if on else self.night_mons.discard)(t)
@@ -287,7 +322,7 @@ class Engine:
 
     def hotkey_map(self):
         m = {}
-        for mon in self.cfg["monitors"]:
+        for mon in self.mons():
             for name, p in mon["presets"].items():
                 if p.get("hotkey"):
                     m[f"p|{mon['id']}|{name}"] = p["hotkey"]
@@ -321,7 +356,9 @@ class Engine:
     # -- játékfigyelő
     def watch_tick(self):
         self.refresh_running()
-        for mon in self.cfg["monitors"]:
+        if time.time() - self.monitors_t > self.MONITOR_POLL:
+            self.refresh_monitors()
+        for mon in self.mons():
             mid = mon["id"]
             for key in [k for k in self.manual_off if k[0] == mid]:
                 p = self.preset(*key)
@@ -365,6 +402,7 @@ class Engine:
         return False
 
     # -- rendszeresemények: ébredés, kijelzőváltás, feloldás (hw.SystemEvents hívja)
+    MONITOR_POLL = 6.0                                         # ennyi másodpercenként ellenőrzi a figyelő a csatlakoztatott monitorokat
     EVENT_DELAYS = {"resume": (2.0, 6.0, 15.0), "display": (1.0, 4.0), "unlock": (1.5, 5.0)}
     EVENT_TEXT = {"resume": "ébredés után", "display": "kijelzőváltás után", "unlock": "a munkamenet feloldása után"}
 
@@ -372,9 +410,18 @@ class Engine:
         """A driver ilyenkor gyakran nullázza a gamma-görbét vagy a vibrance-t, de a monitor még nem biztos, hogy kész:
         ezért néhány késleltetéssel újra ellenőrzünk (ami rendben van, ahhoz nem nyúlunk, így nincs villanás)."""
         for d in self.EVENT_DELAYS.get(kind, (2.0,)):
-            t = threading.Timer(d, self.reapply, args=(kind,))
+            t = threading.Timer(d, self._after_event, args=(kind,))
             t.daemon = True
             t.start()
+
+    def _after_event(self, kind):
+        if self.stop:
+            return
+        try:
+            self.refresh_monitors()                              # monitor ki-/becsatlakoztatása is kijelzőváltás
+        except Exception as e:
+            self.say(f"Monitor-detektálás hiba ({e.__class__.__name__})")
+        self.reapply(kind)
 
     def reapply(self, kind):
         if self.stop or self.hold or self.panel_open:         # a panel előnézete / az összehasonlítás nem bántható
@@ -383,7 +430,7 @@ class Engine:
             if time.time() - self.reapplied_t < 0.4:          # a közeli események egyszeri ellenőrzést kapnak
                 return
             self.reapplied_t = time.time()
-            for mon in self.cfg["monitors"]:
+            for mon in self.mons():
                 try:
                     self.enforce(mon["id"], self.EVENT_TEXT.get(kind, kind))
                 except Exception as e:
@@ -392,7 +439,7 @@ class Engine:
     # -- mellékhatások: energiaprofil, RGB (külön szálban, mert lassú lehet)
     def desired_fx(self):
         power, rgb = None, None
-        for mon in self.cfg["monitors"]:
+        for mon in self.mons():
             p = self.preset(mon["id"], self.active.get(mon["id"])) if mon["id"] in self.active else None
             if p:
                 power = power or p.get("power") or None
@@ -437,7 +484,7 @@ class Engine:
         with self.lock:
             self.active.clear()
             self.night_mons.clear()
-            for m in self.cfg["monitors"]:
+            for m in self.mons():
                 self.apply_display(m["id"], NEUTRAL)
         try:
             self.fx_once()

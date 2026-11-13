@@ -18,6 +18,7 @@ def fake_engine():
         sync=lambda *a: None, say=lambda t: None, toast=lambda text, mid=None: toasts.append((text, mid)),
     )
     e.mon = lambda mid: next((m for m in e.cfg["monitors"] if m["id"] == mid), None)
+    e.mons = lambda: e.cfg["monitors"]
     return e, toasts
 
 
@@ -29,8 +30,7 @@ class ToggleNightToastTest(unittest.TestCase):
 
     def test_mind_nem_ad_monitort(self):
         e, toasts = fake_engine()
-        with mock.patch.object(engine, "find_dev", return_value="X"):
-            engine.Engine.toggle_night(e, None)
+        engine.Engine.toggle_night(e, None)
         self.assertEqual(toasts, [("Éjszakai mód: minden monitor – be", None)])
 
 

@@ -32,14 +32,17 @@ class StubDisplay:
         return False
 
 
-def make_engine(test, cfg=None, settings=None, active=("MON1", "Játék")):
-    """(Engine, StubDisplay). A patch-ek a teszt végén (addCleanup) megszűnnek. `active`: induláskor bekapcsolt (monitor, preset)."""
+def make_engine(test, cfg=None, settings=None, active=("MON1", "Játék"), plugged=None):
+    """(Engine, StubDisplay). A patch-ek a teszt végén (addCleanup) megszűnnek. `active`: induláskor bekapcsolt (monitor, preset).
+    `plugged`: a csatlakoztatott monitorok azonosítói (módosítható lista, a teszt ki-/becsatlakoztathat); alapból a cfg összes monitora."""
     cfg = copy.deepcopy(cfg or default_cfg())
+    test.plugged = [m["id"] for m in cfg["monitors"]] if plugged is None else plugged
     sett = copy.deepcopy(DEFAULT_SETTINGS)
     sett.update(settings or {})
     display = StubDisplay()
     for target, repl in (("load_config", lambda: cfg), ("load_settings", lambda: sett), ("Display", lambda: display),
-                         ("Rgb", lambda: object()), ("find_dev", lambda mid: "DEV_" + mid), ("write_log", lambda text: None)):
+                         ("Rgb", lambda: object()), ("find_dev", lambda mid: "DEV_" + mid),
+                         ("list_monitors", lambda: [{"id": i, "dev": "DEV_" + i} for i in test.plugged]), ("write_log", lambda text: None)):
         mock.patch.object(engine_mod, target, repl).start()
     mock.patch.object(engine_mod.Engine, "refresh_running", lambda self: None).start()
     test.addCleanup(mock.patch.stopall)
