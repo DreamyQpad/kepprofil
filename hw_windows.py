@@ -87,6 +87,23 @@ def monitor_rect(mid):
     return found[0] if found else None
 
 
+user32.GetForegroundWindow.restype = ctypes.c_void_p
+user32.MonitorFromWindow.restype, user32.MonitorFromWindow.argtypes = ctypes.c_void_p, [ctypes.c_void_p, wt.DWORD]
+
+
+def foreground_monitor_id():
+    """Az előtérben lévő ablak monitorjának azonosítója (mint a list_monitors()-é); None, ha nem megállapítható."""
+    hwnd = user32.GetForegroundWindow()
+    hmon = user32.MonitorFromWindow(hwnd, 2) if hwnd else None          # 2 = a legközelebbi monitor
+    if not hmon:
+        return None
+    mi = _MONITORINFOEX()
+    mi.cbSize = ctypes.sizeof(mi)
+    if not user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+        return None
+    return next((m["id"] for m in list_monitors() if m["dev"].lower() == mi.szDevice.lower()), None)
+
+
 def _clamp(v):
     return 0.0 if v < 0 else (1.0 if v > 1 else v)
 
@@ -228,12 +245,14 @@ WM_HOTKEY, WM_RELOAD = 0x0312, 0x8001
 
 
 class Hotkeys(threading.Thread):
-    """Globális gyorsgombok: a RegisterHotKey és az üzenethurok ugyanabban a szálban kell, hogy legyen."""
+    """Globális gyorsgombok: a RegisterHotKey és az üzenethurok ugyanabban a szálban kell, hogy legyen.
+    A térkép értéke szöveg ("Ctrl+Alt+1") vagy nyers (módosítók, vk, ismétlődhet) hármas; ez utóbbi lehet módosító nélküli is."""
 
     def __init__(self, callback):
         super().__init__(daemon=True)
         self.cb, self.tid, self.wanted, self.failed = callback, None, {}, set()
         self.ready, self.lock = threading.Event(), threading.Lock()
+        self.applied = threading.Event()                      # a legutóbbi set() lefoglalásai megtörténtek (failed érvényes)
 
     def run(self):
         self.tid = kernel32.GetCurrentThreadId()
@@ -249,22 +268,30 @@ class Hotkeys(threading.Thread):
                 with self.lock:
                     wanted = dict(self.wanted)
                 failed = set()
-                for n, (action, text) in enumerate(wanted.items(), 1):
-                    hk = parse_hotkey(text)
-                    if hk and user32.RegisterHotKey(None, n, hk[0] | 0x4000, hk[1]):
+                for n, (action, spec) in enumerate(wanted.items(), 1):
+                    if isinstance(spec, tuple):
+                        hk = spec
+                    else:
+                        parsed = parse_hotkey(spec)
+                        hk = (parsed[0], parsed[1], False) if parsed else None
+                    # MOD_NOREPEAT (0x4000): a nyomva tartott gomb csak egyszer hat, kivéve ahol az ismétlés a cél (csúszka)
+                    if hk and user32.RegisterHotKey(None, n, hk[0] | (0 if hk[2] else 0x4000), hk[1]):
                         ids[n] = action
                     else:
                         failed.add(action)
                 self.failed = failed
+                self.applied.set()
             elif msg.message == WM_HOTKEY and msg.wParam in ids:
                 self.cb(ids[msg.wParam])
 
     def set(self, mapping):
         with self.lock:
             self.wanted = dict(mapping)
+        self.applied.clear()
         self.ready.wait(5)
         if self.tid:
             user32.PostThreadMessageW(self.tid, WM_RELOAD, 0, 0)
+            self.applied.wait(3)
 
 
 
@@ -355,6 +382,10 @@ class Display:
     @property
     def vibrance_ok(self):
         return self.nv.ok
+
+    def vibrance_state(self, dev):
+        """(elérhető, indok): Windowson az NVAPI minden NVIDIA-s kijelzőre elérhető."""
+        return (True, "") if self.nv.ok else (False, "Nincs NVIDIA driver.")
 
     def apply(self, dev, vals, mult=(1.0, 1.0, 1.0)):
         """vals = (gamma, kontraszt, fényerő, vibrance); mult = R/G/B szorzó. Igaz, ha sikerült."""

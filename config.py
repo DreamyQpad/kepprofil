@@ -41,8 +41,8 @@ def write_log(text):
         pass
 
 
-DEFAULT_SETTINGS = {"night_strength": 60, "night_hotkey": "", "neutral_hotkey": "", "toast": True,
-                    "base_rgb": {"mode": "none", "value": ""}, "migrated": False}
+DEFAULT_SETTINGS = {"night_strength": 60, "night_hotkey": "", "neutral_hotkey": "", "cycle_hotkey": "", "overlay_hotkey": "",
+                    "toast": True, "base_rgb": {"mode": "none", "value": ""}, "migrated": False}
 
 
 def load_settings():
@@ -57,7 +57,7 @@ def new_preset(vals=NEUTRAL, process=""):
 
 
 BACKUP_DIR = DATA_DIR / "backup"
-SETTINGS_KEYS = ("night_strength", "night_hotkey", "neutral_hotkey", "toast", "base_rgb")      # ami a mentésbe/exportba kerül
+SETTINGS_KEYS = ("night_strength", "night_hotkey", "neutral_hotkey", "cycle_hotkey", "overlay_hotkey", "toast", "base_rgb")      # ami a mentésbe/exportba kerül
 
 
 def auto_backup():

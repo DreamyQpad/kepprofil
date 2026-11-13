@@ -73,6 +73,14 @@ class Rgb:
             raise
 
 
+# Az overlay gombjai: művelet -> (módosítók, virtuális billentyűkód, ismétlődhet-e a nyomva tartott gomb). Csak a panel
+# nyitva tartása alatt vannak lefoglalva; módosító nélküliek is lehetnek, ezért nem a parse_hotkey-n mennek át.
+OVERLAY_KEYS = {"ov|up": (0, 0x26, True), "ov|down": (0, 0x28, True),
+                "ov|left": (0, 0x25, True), "ov|right": (0, 0x27, True),
+                "ov|sleft": (0x4, 0x25, True), "ov|sright": (0x4, 0x27, True),
+                "ov|reset": (0, 0x2E, False), "ov|save": (0, 0x0D, False),
+                "ov|new": (0, 0x4E, False), "ov|close": (0, 0x1B, False)}
+
 MODS = {"ctrl": 0x2, "alt": 0x1, "shift": 0x4}
 NAMED_KEYS = {"esc": 0x1B, "space": 0x20, "insert": 0x2D, "delete": 0x2E, "home": 0x24, "end": 0x23,
               "pageup": 0x21, "pagedown": 0x22, "up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27,
@@ -104,3 +112,31 @@ def parse_hotkey(text):
     return mods, vk
 
 
+
+
+def parse_action(text):
+    """Parancssori akció -> a motor belső akció-azonosítója (`Engine.run_action`), vagy None, ha hibás.
+
+    night | neutral | cycle | preset:<monitor>:<név> | variant:<monitor>:<név>:<változat>; a cycle az aktív játék(ok)
+    következő változatára lép. A belső alak (`p|…`, `v|…`) is elfogadott. A név ne tartalmazzon kettőspontot."""
+    text = (text or "").strip()
+    if text in ("night", "neutral", "cycle"):
+        return text
+    if text[:2] in ("p|", "v|"):
+        need = {"p": 3, "v": 4}[text[0]]
+        return text if len(text.split("|")) == need and all(text.split("|")) else None
+    kind, _, rest = text.partition(":")
+    parts = rest.split(":")
+    need = {"preset": 2, "variant": 3}.get(kind)
+    if need is None or len(parts) != need or not all(parts):
+        return None
+    return "|".join([{"preset": "p", "variant": "v"}[kind], *parts])
+
+
+def build_action(kind, *parts):
+    """A `parse_action` ellentettje: preset | variant + részek -> parancssori akció (None, ha a nevek nem férnek bele)."""
+    if any(not x or "|" in x for x in parts):
+        return None
+    if any(":" in x for x in parts):                                 # a kettőspontos nevekhez a belső alak való
+        return "|".join([{"preset": "p", "variant": "v"}[kind], *parts])
+    return ":".join([kind, *parts])

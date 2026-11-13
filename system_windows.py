@@ -97,9 +97,29 @@ def signal_running(ev):
     kernel32.SetEvent(ev)
 
 
-def show_signaled(ev, ms):
-    """Igaz, ha a második indítás jelzett a várakozás alatt."""
+def show_signaled(ev, ms, on_action=None):
+    """Igaz, ha a második indítás jelzett a várakozás alatt (az on_action Windowson nem használt: ott natív gyorsgomb van)."""
     return kernel32.WaitForSingleObject(ev, ms) == 0
+
+
+def ensure_launcher():
+    """Windowson a telepítő hozza létre a Start menü bejegyzést."""
+
+
+SHORTCUT_HELP = False                    # Windowson a saját globális gyorsgomb van, nincs szükség KDE-súgóra
+
+
+def action_command(action):
+    return ""
+
+
+def open_shortcut_settings():
+    return False
+
+
+def send_action(action):
+    """Windowson nincs `--action`: a globális gyorsgombot a RegisterHotKey adja."""
+    return False
 
 
 def open_native(p):

@@ -46,6 +46,21 @@ def edid_id(edid):
     return f"{maker}{edid[10] | (edid[11] << 8):04X}"
 
 
+DRM_ROOT = Path("/sys/class/drm")
+NVIDIA_VENDOR = "0x10de"
+
+
+def output_vendor(output, drm_root=None):
+    """A kimenet (pl. "HDMI-A-1") videokártyájának PCI-gyártóazonosítója ("0x10de" = NVIDIA, "0x1002" = AMD), vagy None."""
+    root = drm_root or DRM_ROOT
+    for conn in root.glob(f"card*-{output}"):
+        try:
+            return (root / conn.name.split("-")[0] / "device" / "vendor").read_text().strip().lower()
+        except OSError:
+            continue
+    return None
+
+
 def read_edid(output):
     for path in glob.glob(f"/sys/class/drm/card*-{output}/edid"):
         try:
@@ -81,14 +96,37 @@ def find_dev(mid):
     return None
 
 
+def active_output_name():
+    """A KWin aktív kimenetének neve (az a képernyő, ahol a felhasználó épp dolgozik); None, ha nem kérdezhető le.
+    A hívás a GUI szálról fut, ezért rövid időkorlátú; időtúllépés után nem próbálkozik a másik eszközzel, mert
+    ugyanazt a buszt kérdezné."""
+    for tool in ("qdbus6", "qdbus"):
+        if not shutil.which(tool):
+            continue
+        r = run(tool, "org.kde.KWin", "/KWin", "org.kde.KWin.activeOutputName", timeout=1)
+        if r is None:
+            return None
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    return None
+
+
 def monitor_rect(mid):
-    dev = find_dev(mid) if mid else None
+    """(bal, felső, jobb, alsó) a monitorhoz; monitor nélkül (pl. "semleges kép", "éjszakai mód: mind"), vagy ha a
+    megadott monitor nincs csatlakoztatva, az aktív képernyő téglalapja, hogy az értesítés ne az összes monitor
+    együttes közepére (a két képernyő közti élre) kerüljön."""
+    dev = (find_dev(mid) if mid else None) or active_output_name()
     for o in kscreen_outputs():
         if o["name"] == dev:
             pos, size = o.get("pos") or {}, o.get("size") or {}
             if size.get("width"):
                 x, y = pos.get("x", 0), pos.get("y", 0)
                 return (x, y, x + size["width"], y + size["height"])
+    return None
+
+
+def foreground_monitor_id():
+    """Waylanden nincs szabványos előtér-ablak lekérdezés; az overlay ilyenkor az első aktív presetes monitort veszi."""
     return None
 
 
@@ -185,6 +223,19 @@ class Display:
     @property
     def vibrance_ok(self):
         return self.has_nvibrant
+
+    def vibrance_state(self, dev):
+        """(elérhető, indok): a vibrance csak az NVIDIA-s kártyán lévő, a vibrance_index.json-ban szereplő kimeneten állítható."""
+        if not dev:
+            return False, "A monitor nincs csatlakoztatva."
+        if not self.has_nvibrant:
+            return False, "A vibrance-hoz az nvibrant kell (nincs telepítve)."
+        vendor = output_vendor(dev)
+        if vendor is not None and vendor != NVIDIA_VENDOR:
+            return False, "Ez a kijelző nem az NVIDIA kártyán van (pl. a laptop belső kijelzője az AMD-n), ezért a vibrance csak a külső, NVIDIA-s kimeneten (pl. HDMI) állítható."
+        if dev not in vibrance_index():
+            return False, f"A(z) {dev} kimenet nincs a vibrance_index.json-ban."
+        return True, ""
 
     def apply(self, dev, vals, mult=(1.0, 1.0, 1.0)):
         gamma, contrast, brightness, vib = vals

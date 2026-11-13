@@ -2,7 +2,7 @@
 import threading
 import time
 
-from config import _write_json, load_config, load_settings, night_mult, pgain, pvals, write_log
+from config import _write_json, load_config, load_settings, mirror_first, night_mult, pgain, pvals, write_log
 from consts import CONFIG_FILE, NEUTRAL, SETTINGS_FILE
 from hw import Display, Rgb, find_dev, power_active, power_set
 
@@ -31,7 +31,22 @@ class Engine:
         self.rgb_applied = dict(self.set["base_rgb"])           # induláskor feltételezzük, hogy már az alap látszik
         self.stop = False
         self.reapplied_t = 0.0
+        self.migrate_cycle_hotkey()
         self.refresh_running()
+
+    def migrate_cycle_hotkey(self):
+        """A léptető gyorsgomb globális (egy gomb minden játéknál). A régi, presetenkénti beállításból az első
+        talált gomb lesz a globális (ha még nincs), a presetenkéntiek törlődnek."""
+        found = ""
+        for mon in self.cfg["monitors"]:
+            for p in mon["presets"].values():
+                found = found or p.get("cycle_hotkey", "")
+                p.pop("cycle_hotkey", None)
+        if found and not self.set.get("cycle_hotkey"):
+            self.set["cycle_hotkey"] = found
+        if found:
+            self.save_config()
+            self.save_settings()
 
     # -- segédek
     def say(self, text):
@@ -180,6 +195,59 @@ class Engine:
                 self.toast(self.label(mid, name), mid)
         self.say(f"{(self.mon(mid) or {}).get('name', mid)}: '{name}' – {self.cur_variant(mid, name)}")
 
+    def cycle_active(self):
+        """A globális léptető gomb: minden monitoron a most aktív preset következő változatára lép
+        (csak azon, amelyiknek vannak változatai); ha nincs ilyen, jelzi."""
+        with self.lock:
+            targets = [(m["id"], self.active[m["id"]]) for m in self.cfg["monitors"]
+                       if m["id"] in self.active and (self.preset(m["id"], self.active[m["id"]]) or {}).get("variants")]
+        if not targets:
+            self.toast("Nincs aktív preset változatokkal")
+            return
+        for mid, name in targets:
+            self.cycle_variant(mid, name)
+
+    # -- játék-overlay: az aktuális játék profiljának szerkesztése a játék fölött
+    def overlay_target(self, fg_mid=None):
+        """(monitor, preset), amit az overlay szerkeszt: az előtérben lévő ablak monitorja, ha ott van aktív preset;
+        különben az első monitor, amelyiken van. None, ha sehol nincs aktív preset."""
+        with self.lock:
+            if fg_mid in self.active and self.preset(fg_mid, self.active[fg_mid]) is not None:
+                return fg_mid, self.active[fg_mid]
+            return next(((m["id"], self.active[m["id"]]) for m in self.cfg["monitors"]
+                         if m["id"] in self.active and self.preset(m["id"], self.active[m["id"]]) is not None), None)
+
+    @staticmethod
+    def _values(vals, gain):
+        g, c, b, v = vals
+        return {"gamma": g, "contrast": c, "brightness": b, "vibrance": v, "gain": [int(x) for x in gain]}
+
+    def save_values(self, mid, name, vals, gain):
+        """Az érvényes változatba (változat nélküli presetnél a felső szintre) menti a képértékeket; vals = (gamma
+        belső skálán, kontraszt, fényerő, vibrance), gain = R/G/B százalék. A preset többi mezőjéhez nem nyúl."""
+        with self.lock:
+            p = self.preset(mid, name)
+            if p is None:
+                return
+            target = p["variants"][self.cur_variant(mid, name)] if p.get("variants") else p
+            target.update(self._values(vals, gain))
+            mirror_first(p)
+            self.save_config()
+
+    def add_variant(self, mid, name, vals, gain):
+        """Új változat a megadott értékekből, automatikus névvel („Változat N", N ≥ 2); a visszaadott név lesz az érvényes.
+        Ha a presetnek még nem volt változata, az eddigi értékek „Alap" néven az első változattá válnak."""
+        with self.lock:
+            p = self.preset(mid, name)
+            if not p.get("variants"):
+                p["variants"] = {"Alap": {"gamma": p["gamma"], "contrast": p["contrast"], "brightness": p["brightness"],
+                                          "vibrance": p.get("vibrance", 50), "gain": pgain(p)}}
+            n = next(f"Változat {k}" for k in range(2, len(p["variants"]) + 3) if f"Változat {k}" not in p["variants"])
+            p["variants"][n] = self._values(vals, gain)
+            self.variant[(mid, name)] = n
+            self.save_config()
+            return n
+
     def toggle_night(self, mid=None):
         """Éjszakai mód: mid megadva -> csak az a monitor; nélküle (gyorsgomb/tálca "mind") -> ha bárhol be van
         kapcsolva, mindenhol ki, különben minden jelenlegi monitoron be."""
@@ -196,7 +264,7 @@ class Engine:
                 self.night_mons.clear()
             self.sync()
         text = f"Éjszakai mód: {label} – " + ("be" if on else "ki")
-        self.toast(text)
+        self.toast(text, mid)
         self.say(text)
 
     def set_night_strength(self, v):
@@ -226,8 +294,10 @@ class Engine:
                 for vn, v in (p.get("variants") or {}).items():
                     if v.get("hotkey"):
                         m[f"v|{mon['id']}|{name}|{vn}"] = v["hotkey"]
-                if p.get("cycle_hotkey") and p.get("variants"):
-                    m[f"c|{mon['id']}|{name}"] = p["cycle_hotkey"]
+        if self.set.get("cycle_hotkey"):
+            m["cycle"] = self.set["cycle_hotkey"]
+        if self.set.get("overlay_hotkey"):
+            m["overlay"] = self.set["overlay_hotkey"]
         if self.set.get("night_hotkey"):
             m["night"] = self.set["night_hotkey"]
         if self.set.get("neutral_hotkey"):
@@ -242,9 +312,8 @@ class Engine:
         elif action.startswith("v|"):
             _, mid, name, vname = action.split("|", 3)
             self.select_variant(mid, name, vname)
-        elif action.startswith("c|"):
-            _, mid, name = action.split("|", 2)
-            self.cycle_variant(mid, name)
+        elif action == "cycle":
+            self.cycle_active()
         elif action.startswith("p|"):
             _, mid, name = action.split("|", 2)
             self.toggle_preset(mid, name)
