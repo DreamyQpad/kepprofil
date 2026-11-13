@@ -17,6 +17,7 @@ class Engine:
         self.active = {}            # monitor-azonosító -> bekapcsolt preset neve
         self.manual_off = set()     # (monitor, preset): kézzel kikapcsolva, amíg a játék fut
         self.auto = set()           # (monitor, preset): a játék indította; a játék kilépésekor kikapcsol
+        self.prev = {}              # monitor -> a játék indulása előtt kézzel bekapcsolt preset; a kilépés ezt állítja vissza
         self.variant = {}           # (monitor, preset) -> érvényes változat neve (futásidejű; hiányában az első)
         self.toast_cb = lambda text, mid: None      # a GUI állítja be: képernyő-értesítés
         self.monitors_cb = lambda: None             # a GUI állítja be: a csatlakoztatott monitorok köre változott
@@ -92,7 +93,8 @@ class Engine:
             for mid in [k for k in self.active if k.lower() in gone]:
                 name = self.active.pop(mid)
                 self.auto.discard((mid, name))
-            self.night_mons -= {k for k in self.night_mons if k.lower() in gone}
+                self.prev.pop(mid, None)
+            self.night_mons -={k for k in self.night_mons if k.lower() in gone}
         if changed and not initial:
             names = ", ".join(m["name"] for m in self.mons())
             self.say(f"Monitorok változtak: {names}")
@@ -170,6 +172,7 @@ class Engine:
             changed = True
             if on:
                 self.active[mid] = name
+                self.prev.pop(mid, None)                       # kézi választás: a kilépés már nem ír felül
                 self.manual_off.discard((mid, name))
                 # ha a játék épp fut, a játék kilépése kikapcsolja; ha nem fut, a preset kézi marad
                 (self.auto.add if running else self.auto.discard)((mid, name))
@@ -315,6 +318,7 @@ class Engine:
                     self.manual_off.add((mid, name))
             self.active.clear()
             self.auto.clear()
+            self.prev.clear()
             self.night_mons.clear()
             self.sync()
         self.toast("Semleges kép")
@@ -370,6 +374,11 @@ class Engine:
             if hit and cur != hit[0]:
                 time.sleep(3)                                  # a játék vegye fel a képernyőmódját
                 with self.lock:
+                    if not (cur and (mid, cur) in self.auto):      # másik játék átvételekor a korábbi alap marad
+                        if cur:
+                            self.prev[mid] = cur
+                        else:
+                            self.prev.pop(mid, None)
                     self.active[mid] = hit[0]
                     self.variant.pop((mid, hit[0]), None)          # a játék indulásakor az első változat
                     self.auto.add((mid, hit[0]))
@@ -382,8 +391,12 @@ class Engine:
                     with self.lock:
                         self.active.pop(mid, None)
                         self.auto.discard((mid, cur))
+                        back = self.prev.pop(mid, None)
+                        if back and self.preset(mid, back) is not None:
+                            self.active[mid] = back                # a játék előtti alap, nem a semleges kép
                         self.sync(mid)
-                    self.say(f"{mon['name']}: '{cur}' kikapcsolt (a játék kilépett)")
+                    self.say(f"{mon['name']}: '{cur}' kikapcsolt (a játék kilépett)"
+                             + (f", vissza: '{back}'" if self.active.get(mid) == back and back else ""))
             if not (self.panel_open or self.hold):
                 self.enforce(mid)
 
