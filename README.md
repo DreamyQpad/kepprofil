@@ -6,8 +6,8 @@ kilépéskor visszaáll az alaphelyzet. Kézzel is váltható tálcamenüből va
 
 Eredetileg két, kézzel összerakott szkriptből (Linuxos KDE-panel, majd PowerShell-es változat) nőtt egy közös programmá.
 
-**Állapot (v2.10):** Windows 11-en használatra kész. Linux (KDE Plasma Wayland) a kódban megvan, de még **soha nem futott
-Linuxon** – lásd [LINUX.md](LINUX.md).
+**Állapot (v2.10):** Windows 11-en és Linuxon (KDE Plasma Wayland) is használatra kész; a Linuxos változat valódi gépen
+tesztelve, működik – lásd [LINUX.md](LINUX.md).
 
 ## Mit tud
 
@@ -32,11 +32,11 @@ Linuxon** – lásd [LINUX.md](LINUX.md).
 
 | | Windows 11 | Linux (KDE Plasma Wayland) |
 |---|---|---|
-| Gamma / kontraszt / fényerő | `SetDeviceGammaRamp` | ICC-profil + `kscreen-doctor` *(nem tesztelt)* |
-| Vibrance | NVAPI | `nvibrant` – csak NVIDIA *(nem tesztelt)* |
+| Gamma / kontraszt / fényerő | `SetDeviceGammaRamp` | ICC-profil + `kscreen-doctor` |
+| Vibrance | NVAPI | `nvibrant` – csak NVIDIA |
 | Globális gyorsgomb | `RegisterHotKey` | `kijelzo.py --action …` + KDE-gyorsbillentyű (tálcamenü: „Gyorsbillentyűk (KDE)…"); a játék-overlay Linuxon nem érhető el |
-| Ébredés-észlelés | `WM_POWERBROADCAST` | logind `PrepareForSleep` *(nem tesztelt)* |
-| Energiaprofil | `powercfg` | `powerprofilesctl` *(nem tesztelt)* |
+| Ébredés-észlelés | `WM_POWERBROADCAST` | logind `PrepareForSleep` |
+| Energiaprofil | `powercfg` | `powerprofilesctl` |
 
 Egyetlen kódbázis, a platformfüggő részek külön modulban (`hw_windows.py` / `hw_linux.py`, `system_windows.py` /
 `system_linux.py`); a `hw.py` és a `system.py` választja ki a megfelelőt.
@@ -103,7 +103,6 @@ Telepítés Linuxon: [LINUX.md](LINUX.md).
 - A `gui.py` további bontása (a `run_app` még egyetlen nagy függvény).
 
 **Linux** (részletesen: [LINUX.md](LINUX.md))
-- Első futtatás és hibajavítás valódi KDE Wayland alatt.
 - Globális gyorsgomb: futó példány parancsot fogad, a KDE gyorsbillentyűkhöz kötve.
 - KDE-értesítés a tk-ablak helyett, a csúszkák előnézetének összevonása (kscreen-doctor lassú).
 - Játékfelismerés Proton alatt (a folyamatnév 15 karakterre csonkul).

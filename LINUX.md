@@ -1,7 +1,7 @@
 # Képprofil – Linux (KDE Plasma Wayland)
 
-Átadó jegyzet: a Linux-rész **Windows-gépen íródott, Linuxon még soha nem futott**. Cél: ugyanazt tudja, mint a Windowsos
-változat, egyetlen kódbázisból (`main` ág, nincs külön linux ág).
+Átadó jegyzet: a Linux-rész Windows-gépen íródott, majd valódi Linuxos gépen tesztelve lett, és működik. Cél: ugyanazt
+tudja, mint a Windowsos változat, egyetlen kódbázisból (`main` ág, nincs külön linux ág).
 
 ## Felépítés
 - `kijelzo.py` – belépési pont. `hw.py` / `system.py` – platformválasztók (win32 → `*_windows`, különben `*_linux`).
@@ -22,8 +22,7 @@ kepprofil                  # vagy: kepprofil --tray
 ```
 Az `install.sh` a `~/.local/share/kepprofil/` alá másol (program + virtuális környezet `--system-site-packages`-szel),
 és létrehozza a `~/.local/bin/kepprofil` parancsot. Újrafuttatva frissít; a beállításokhoz (`~/.config/kepprofil/`) nem nyúl.
-Eltávolítás: `./uninstall.sh` (`--purge`: a beállításokat is törli). A Linuxos rész ezzel a csomaggal még **nem lett kipróbálva
-valódi gépen**; a szkriptek logikáját hamis parancsokkal ellenőriztük.
+Eltávolítás: `./uninstall.sh` (`--purge`: a beállításokat is törli).
 
 ## Indítás (forrásból)
 ```
