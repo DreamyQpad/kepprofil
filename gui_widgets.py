@@ -1,6 +1,7 @@
 """Önálló felületi elemek (customtkinter): gyorsgomb-mező, RGB-választó, értékmező, csúszka-sor, szakaszcím.
 A modul a customtkinter-t importálja, ezért a `gui.run_app` csak a felület indításakor tölti be."""
 import re
+from collections import namedtuple
 from tkinter import colorchooser
 
 import customtkinter as ctk
@@ -81,7 +82,7 @@ class RgbPicker(ctk.CTkFrame):
         self.swatch = ctk.CTkButton(self, text="", width=60, command=self._pick_color, fg_color=self.color,
                                     hover_color=self.color)
         self.profile_entry = ctk.CTkEntry(self, width=150, placeholder_text="profil neve")
-        self.profile_entry.bind("<KeyRelease>", lambda e: self._notify())
+        self.profile_entry.bind("<KeyRelease>", lambda event: self._notify())
         self._on_mode(self.mode_menu.get(), notify=False)
 
     def _on_mode(self, label, notify=True):
@@ -113,7 +114,7 @@ class RgbPicker(ctk.CTkFrame):
 
     def set(self, spec):
         mode = (spec or {}).get("mode", "none")
-        label = next(k for k, v in RGB_MODES.items() if v == mode) if mode in RGB_MODES.values() else "Nem változtat"
+        label = next(text for text, code in RGB_MODES.items() if code == mode) if mode in RGB_MODES.values() else "Nem változtat"
         self.mode_menu.set(label)
         value = (spec or {}).get("value", "")
         if mode == "snapshot":
@@ -133,8 +134,8 @@ class ValueBox(ctk.CTkEntry):
     def __init__(self, parent, commit):
         super().__init__(parent, width=68, height=26, justify="right")
         self._commit = commit
-        self.bind("<Return>", lambda e: self._done(True))
-        self.bind("<FocusOut>", lambda e: self._done(False))
+        self.bind("<Return>", lambda event: self._done(True))
+        self.bind("<FocusOut>", lambda event: self._done(False))
 
     def configure(self, **options):
         if "text" in options:
@@ -154,9 +155,12 @@ class ValueBox(ctk.CTkEntry):
             self.winfo_toplevel().focus_set()
 
 
+SliderRow = namedtuple("SliderRow", "slider value_box format_value")
+
+
 def build_slider(parent, caption, low, high, steps, format_value, on_change, default=None):
     """Címkével és beírható értékmezővel ellátott csúszka. `on_change()` fut, ha a csúszka értéke változik; dupla kattintás
-    a `default` értékre állít. Visszaad: (csúszka, értékmező, formázó függvény)."""
+    a `default` értékre állít. Visszaad: `SliderRow(slider, value_box, format_value)`."""
     row = ctk.CTkFrame(parent, fg_color="transparent")
     row.pack(fill="x", pady=(16, 0))
     ctk.CTkLabel(row, text=caption).pack(side="left")
@@ -167,7 +171,7 @@ def build_slider(parent, caption, low, high, steps, format_value, on_change, def
             return
         slider.set(value)
         command = slider.cget("command")
-        (command or (lambda v: on_change()))(value)
+        (command or (lambda changed_value: on_change()))(value)
 
     def on_typed(text):
         try:
@@ -181,8 +185,8 @@ def build_slider(parent, caption, low, high, steps, format_value, on_change, def
     value_box.pack(side="right")
     slider.pack(fill="x", pady=(5, 0))
     if default is not None:
-        slider.bind("<Double-Button-1>", lambda e: set_and_notify(default))     # dupla kattintás: alapérték
-    return slider, value_box, format_value
+        slider.bind("<Double-Button-1>", lambda event: set_and_notify(default))     # dupla kattintás: alapérték
+    return SliderRow(slider, value_box, format_value)
 
 
 def section_title(parent, text):

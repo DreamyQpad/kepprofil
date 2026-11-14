@@ -29,3 +29,4 @@ OLD_DIR = Path.home() / "Tools" / "display-presets"          # az előző (Power
 STARTUP_DIR = Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
 CREATE_NO_WINDOW = 0x08000000
 NEUTRAL = (2.2, 50, 50, 50)          # gamma, kontraszt, fényerő, vibrance
+BASE_PRESET_NAME = "Alap"            # minden monitor alap presetje: nem törölhető és nem nevezhető át

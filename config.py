@@ -4,7 +4,7 @@ import shutil
 import threading
 import time
 
-from consts import CONFIG_FILE, DATA_DIR, LOG_FILE, NEUTRAL, OLD_DIR, SETTINGS_FILE
+from consts import BASE_PRESET_NAME, CONFIG_FILE, DATA_DIR, LOG_FILE, NEUTRAL, OLD_DIR, SETTINGS_FILE
 from hw import list_monitors
 
 # ---------------------------------------------------------------- beállítások, konfig
@@ -112,7 +112,7 @@ def normalize_config(cfg):
     for mon in cfg["monitors"]:
         mon.setdefault("name", f"Monitor {mon['id']}")
         mon.setdefault("presets", {})
-        mon["presets"].setdefault("Alap", new_preset())
+        mon["presets"].setdefault(BASE_PRESET_NAME, new_preset())
         # a régi változat PowerShell-objektumként mentett mezői is egyszerű dict-ek
     add_new_monitors(cfg, list_monitors())
     return cfg
@@ -125,7 +125,7 @@ def add_new_monitors(cfg, found):
     added = False
     for m in found:
         if m["id"].lower() not in known:
-            cfg["monitors"].append({"id": m["id"], "name": f"Monitor {m['id']}", "presets": {"Alap": new_preset()}})
+            cfg["monitors"].append({"id": m["id"], "name": f"Monitor {m['id']}", "presets": {BASE_PRESET_NAME: new_preset()}})
             known.add(m["id"].lower())
             added = True
     return added

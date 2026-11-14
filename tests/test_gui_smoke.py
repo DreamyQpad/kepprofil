@@ -15,6 +15,9 @@ try:
     import customtkinter as ctk
     import tkinter
     import gui
+    import gui_panel
+    import gui_preset_dialogs
+    import gui_tray
     from tkinter import filedialog, messagebox
 except ImportError:                                     # pragma: no cover - a környezetben nincs GUI-csomag
     ctk = None
@@ -82,9 +85,9 @@ class GuiSmokeTest(unittest.TestCase):
                 (gui, "ensure_launcher", lambda: None), (gui, "auto_backup", lambda: None),
                 (gui, "kill_old_watcher", lambda: None), (gui, "Hotkeys", FakeHotkeys),
                 (gui, "SystemEvents", FakeSystemEvents), (gui, "power_plans", lambda: [("g1", "Nagy teljesítmény", "x")]),
-                (gui, "find_dev", lambda mid: "DEV_" + mid), (gui, "monitor_rect", lambda mid: None),
-                (gui, "foreground_monitor_id", lambda: None), (gui, "start_tray", lambda icon: None),
-                (gui, "show_signaled", lambda *a: time.sleep(0.05)), (gui, "BACKUP_DIR", self.tmp),
+                (gui_panel, "find_dev", lambda mid: "DEV_" + mid), (gui, "monitor_rect", lambda mid: None),
+                (gui, "foreground_monitor_id", lambda: None), (gui_tray, "start_tray", lambda icon: None),
+                (gui, "show_signaled", lambda *a: time.sleep(0.05)), (gui_preset_dialogs, "BACKUP_DIR", self.tmp),
                 (ctk, "CTkInputDialog", FakeDialog),
                 (messagebox, "askyesno", lambda *a, **k: self.confirm)]:
             mock.patch.object(obj, name, value).start()
@@ -121,62 +124,62 @@ class GuiSmokeTest(unittest.TestCase):
         return list(self.eng.mon("MON1")["presets"])
 
     def status(self, H):
-        return H["ui"]["status"].cget("text")
+        return H["panel"].widgets.status_label.cget("text")
 
     def test_indulas_a_bekapcsolt_presetet_tolti(self):
         def sc(root, H):
-            self.assertEqual(H["cur"]["mid"], "MON1")
-            self.assertEqual(H["cur"]["name"], "Játék")
-            self.assertEqual(H["ui"]["preset"].get(), "Játék")
-            self.assertEqual(H["ui"]["proc"].get(), "game")
-            self.assertEqual(H["ui"]["hotkey"].get(), "ctrl+alt+1")
-            self.assertFalse(H["is_dirty"]())
+            self.assertEqual(H["panel"].monitor_id, "MON1")
+            self.assertEqual(H["panel"].preset_name, "Játék")
+            self.assertEqual(H["panel"].widgets.preset_menu.get(), "Játék")
+            self.assertEqual(H["panel"].widgets.process_entry.get(), "game")
+            self.assertEqual(H["panel"].widgets.preset_hotkey.get(), "ctrl+alt+1")
+            self.assertFalse(H["panel"].is_dirty())
         self.run_scenario(sc)
 
     def test_preset_uj_masolas_atnevezes_torles(self):
         eng = self.eng
 
         def sc(root, H):
-            ui = H["ui"]
+            widgets = H["panel"].widgets
             self.answers[:] = ["Új1"]
             buttons(root, "Új…")[0].invoke()
             self.assertEqual(self.presets(), ["Alap", "Játék", "Új1"])
-            self.assertEqual(H["cur"]["name"], "Új1")
-            self.assertEqual(ui["preset"].get(), "Új1")
+            self.assertEqual(H["panel"].preset_name, "Új1")
+            self.assertEqual(widgets.preset_menu.get(), "Új1")
             self.assertEqual(eng.preset("MON1", "Új1")["process"], "game")
             self.assertIn("default", eng.preset("MON1", "Új1"))
 
             self.answers[:] = ["Új1 másolat"]
-            H["pick_preset"]("Játék")
+            H["panel"].pick_preset("Játék")
             buttons(root, "Másolás…")[0].invoke()
             cp = eng.preset("MON1", "Új1 másolat")
             self.assertEqual(cp["process"], "")
             self.assertNotIn("hotkey", cp)
-            self.assertEqual(H["cur"]["name"], "Új1 másolat")
+            self.assertEqual(H["panel"].preset_name, "Új1 másolat")
 
             eng.auto.add(("MON1", "Játék"))
             eng.variant[("MON1", "Játék")] = "x"
-            H["pick_preset"]("Játék")
+            H["panel"].pick_preset("Játék")
             self.answers[:] = ["Játék2"]
-            ui["ren"].invoke()
+            widgets.rename_preset_button.invoke()
             self.assertEqual(self.presets(), ["Alap", "Játék2", "Új1", "Új1 másolat"])
             self.assertEqual(eng.active["MON1"], "Játék2")
             self.assertIn(("MON1", "Játék2"), eng.auto)
             self.assertNotIn(("MON1", "Játék"), eng.auto)
             self.assertEqual(eng.variant[("MON1", "Játék2")], "x")
-            self.assertEqual(H["cur"]["name"], "Játék2")
-            self.assertEqual(ui["preset"].get(), "Játék2")
-            self.assertIn("p|MON1|Játék2", H["hk"].map)
+            self.assertEqual(H["panel"].preset_name, "Játék2")
+            self.assertEqual(widgets.preset_menu.get(), "Játék2")
+            self.assertIn("p|MON1|Játék2", H["hotkeys"].map)
 
-            H["pick_preset"]("Új1 másolat")
-            ui["del"].invoke()
+            H["panel"].pick_preset("Új1 másolat")
+            widgets.delete_preset_button.invoke()
             self.assertEqual(self.presets(), ["Alap", "Játék2", "Új1"])
-            self.assertEqual(H["cur"]["name"], "Játék2")                  # a bekapcsolt preset töltődik be
+            self.assertEqual(H["panel"].preset_name, "Játék2")                  # a bekapcsolt preset töltődik be
             self.assertEqual(self.status(H), "Törölve: Új1 másolat")
 
             self.confirm = False                                          # a törlés megerősítése nélkül marad
-            H["pick_preset"]("Új1")
-            ui["del"].invoke()
+            H["panel"].pick_preset("Új1")
+            widgets.delete_preset_button.invoke()
             self.assertIn("Új1", self.presets())
         self.run_scenario(sc)
 
@@ -195,26 +198,26 @@ class GuiSmokeTest(unittest.TestCase):
         eng = self.eng
 
         def sc(root, H):
-            ui = H["ui"]
-            H["pick_preset"]("Alap")
+            widgets = H["panel"].widgets
+            H["panel"].pick_preset("Alap")
             self.answers[:] = ["Alap"]                                    # az első változat neve foglalt
             buttons(root, "Új…")[1].invoke()
             self.assertFalse(eng.preset("MON1", "Alap").get("variants"))
             self.answers[:] = ["Pálya1"]
             buttons(root, "Új…")[1].invoke()
             self.assertEqual(list(eng.preset("MON1", "Alap")["variants"]), ["Alap", "Pálya1"])
-            self.assertEqual(H["cur"]["variant"], "Pálya1")
-            self.assertEqual(ui["var"].get(), "Pálya1")
+            self.assertEqual(H["panel"].variant_name, "Pálya1")
+            self.assertEqual(widgets.variant_menu.get(), "Pálya1")
 
             self.answers[:] = ["Pálya2"]
-            ui["vren"].invoke()
+            widgets.rename_variant_button.invoke()
             self.assertEqual(list(eng.preset("MON1", "Alap")["variants"]), ["Alap", "Pálya2"])
-            self.assertEqual(H["cur"]["variant"], "Pálya2")
+            self.assertEqual(H["panel"].variant_name, "Pálya2")
             self.assertEqual(eng.variant[("MON1", "Alap")], "Pálya2")
 
-            ui["vdel"].invoke()
+            widgets.delete_variant_button.invoke()
             self.assertEqual(list(eng.preset("MON1", "Alap")["variants"]), ["Alap"])
-            self.assertEqual(H["cur"]["variant"], "Alap")
+            self.assertEqual(H["panel"].variant_name, "Alap")
             self.assertEqual(eng.variant[("MON1", "Alap")], "Alap")      # a megmaradt változat az érvényes
             self.assertEqual(self.status(H), "Törölve: Pálya2")
         self.run_scenario(sc)
@@ -223,13 +226,13 @@ class GuiSmokeTest(unittest.TestCase):
         eng = self.eng
 
         def sc(root, H):
-            H["pick_preset"]("Alap")
-            H["ui"]["b"][0].set(70)
-            H["on_slider"]()
-            self.assertTrue(H["is_dirty"]())
-            H["save"]()
+            H["panel"].pick_preset("Alap")
+            H["panel"].widgets.brightness.slider.set(70)
+            H["panel"].on_slider()
+            self.assertTrue(H["panel"].is_dirty())
+            H["panel"].save_preset()
             self.assertEqual(eng.preset("MON1", "Alap")["brightness"], 70)
-            self.assertFalse(H["is_dirty"]())
+            self.assertFalse(H["panel"].is_dirty())
             self.assertEqual(eng.active["MON1"], "Alap")                  # mentéskor a preset be is kapcsol
             self.assertTrue(self.status(H).startswith("Mentve: Alap"))
         self.run_scenario(sc)
@@ -246,13 +249,13 @@ class GuiSmokeTest(unittest.TestCase):
             self.assertEqual(list(data["config"]["monitors"][0]["presets"]), ["Alap", "Játék"])
             self.assertTrue(self.status(H).startswith("Exportálva"))
 
-            H["ui"]["del"].invoke()                                       # a bekapcsolt "Játék" törlése
+            H["panel"].widgets.delete_preset_button.invoke()                                       # a bekapcsolt "Játék" törlése
             self.assertEqual(self.presets(), ["Alap"])
             with mock.patch.object(filedialog, "askopenfilename", lambda **k: str(path)):
                 buttons(root, "Importálás…")[0].invoke()
             self.assertEqual(self.presets(), ["Alap", "Játék"])
             self.assertEqual(eng.active, {})
-            self.assertEqual(H["cur"]["name"], "Alap")
+            self.assertEqual(H["panel"].preset_name, "Alap")
             self.assertEqual(self.status(H), "Importálva: a presetek és beállítások betöltve.")
             self.assertTrue(any(f.name.endswith("-import-elott.json") for f in self.tmp.iterdir()))
 
@@ -269,10 +272,10 @@ class GuiSmokeTest(unittest.TestCase):
 
         def sc(root, H):
             before = {id(w) for w in walk(root) if isinstance(w, tkinter.Toplevel)}
-            H["show_toast"]("Próba", "MON1")
+            H["toast"].show("Próba", "MON1")
             after = [w for w in walk(root) if isinstance(w, tkinter.Toplevel) and id(w) not in before]
             self.assertEqual(len(after), 1)
-            H["show_toast"]("Második", "MON1")                            # az előző megszűnik, nem halmozódnak
+            H["toast"].show("Második", "MON1")                            # az előző megszűnik, nem halmozódnak
             now = [w for w in walk(root) if isinstance(w, tkinter.Toplevel) and id(w) not in before]
             self.assertEqual(len(now), 1)
 

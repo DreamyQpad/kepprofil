@@ -1,1046 +1,198 @@
-"""A felület: tálcaikon, panel, toast, és a motor/gyorsgombok összekötése (run_app)."""
-import json
+"""A felület belépője: a motor, a gyorsgombok, a tálca, a főablak és az üzenetsor összekötése (run_app). A felület részei külön
+modulokban vannak: `gui_layout` (elrendezés), `gui_panel` (a főablak viselkedése), `gui_preset_dialogs`, `gui_dialogs`,
+`gui_tray`, `gui_toast`, `gui_widgets`."""
 import queue
-import re
 import sys
 import threading
-import time
 import traceback
-from pathlib import Path
 
-from config import BACKUP_DIR, write_log, _read_json, auto_backup, mirror_first, pgain, pvals
-from consts import APP_NAME, DATA_DIR, LOG_FILE, NEUTRAL, RES_DIR, VERSION
+from config import auto_backup, write_log
+from consts import APP_NAME, RES_DIR, VERSION
 from engine import Engine
-from hw import (Hotkeys, SystemEvents, find_dev, foreground_monitor_id, monitor_rect, overlay_style, power_plans)
-from hw_common import build_action
-import preset_ops
+from hw import Hotkeys, SystemEvents, foreground_monitor_id, monitor_rect, power_plans
 from overlay import OverlayController
-from system import (SHORTCUT_HELP, action_command, autostart_enabled, ensure_launcher, kill_old_watcher, open_native,
-                    open_shortcut_settings, set_autostart, signal_running, single_instance, visible_programs, show_signaled,
+from system import (ensure_launcher, kill_old_watcher, show_signaled, signal_running, single_instance,
                     start_process_events)
 
 HOOK = {}                                         # tesztek: a futó felület elemei (run_app tölti fel)
-TRAY_ICON_PX = 32                                 # Linux, xorg-backend (tartalék): a tálcaikon-ablak kezdőmérete
-
-def make_icon(active=False, size=64):
-    """Tálcaikon: kijelző, fél-fényes/fél-sötét képernyővel (szögletes), bekapcsolt állapotban narancs jelzéssel."""
-    from PIL import Image, ImageDraw
-    s = size / 64
-    im = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    d = ImageDraw.Draw(im)
-    box = lambda x0, y0, x1, y1: [round(x0 * s), round(y0 * s), round(x1 * s) - 1, round(y1 * s) - 1]
-    d.rectangle(box(4, 8, 60, 46), fill=(229, 231, 235, 255))
-    d.rectangle(box(8, 12, 56, 42), fill=(30, 41, 59, 255))
-    d.rectangle(box(8, 12, 32, 42), fill=(245, 197, 66, 255))
-    d.rectangle(box(26, 46, 38, 54), fill=(229, 231, 235, 255))
-    d.rectangle(box(16, 54, 48, 59), fill=(229, 231, 235, 255))
-    if active:
-        d.rectangle(box(44, 2, 62, 20), fill=(249, 115, 22, 255), outline=(255, 255, 255, 255), width=max(1, round(2 * s)))
-    return im
+PUMP_INTERVAL_MS = 100                            # az üzenetsor ürítésének gyakorisága
+OVERLAY_TICK_MS = 500
+WINDOW_SIZE = "620x920"
+WINDOW_MIN_SIZE = (580, 760)
+ICON_LOAD_DELAY_MS = 300                          # az ablak ikonját a megjelenés után tölti be (korábban nem fogja meg)
+SHOW_SIGNAL_TIMEOUT_MS = 1000
 
 
-def start_tray(icon):
-    """Elindítja a tálcaikont (pystray `run_detached`). A GTK-s backendek (appindicator, gtk) a menü- és ikonműveleteket
-    GLib idle-ben futtatják, de a `run_detached` nem indít GLib-főciklust, a mi főciklusunk pedig a Tk: főciklus nélkül az
-    ikon sosem jön létre. Ezért a GLib-főciklus külön szálon fut."""
-    if icon.__class__.__module__.rsplit(".", 1)[-1] in ("_appindicator", "_gtk"):
-        import threading
-        from gi.repository import GLib
-        threading.Thread(target=GLib.MainLoop().run, daemon=True, name="glib-tray").start()
-    icon.run_detached()
+def log_exception(where, exc_type, exc_value, exc_traceback):
+    write_log(f"Kezeletlen hiba ({where}):\n" + "".join(traceback.format_exception(exc_type, exc_value, exc_traceback)))
 
 
-# ---------------------------------------------------------------- felület
+def install_exception_hooks():
+    """A főszál és a háttérszálak kezeletlen hibái a naplóba kerülnek."""
+    sys.excepthook = lambda exc_type, exc_value, exc_traceback: log_exception(
+        "főszál", exc_type, exc_value, exc_traceback)
+    threading.excepthook = lambda args: log_exception(
+        f"szál: {args.thread.name if args.thread else '?'}", args.exc_type, args.exc_value, args.exc_traceback)
 
-def run_app(start_hidden):
-    import customtkinter as ctk
-    from tkinter import filedialog, messagebox
-    import pystray
-    from gui_widgets import GREY_BUTTON, MUTED_TEXT, HotkeyEntry, RgbPicker, build_slider, section_title
-    if sys.platform.startswith("linux") and pystray.Icon.__module__.endswith("_xorg"):
-        # A pystray xorg backendje 1x1-es ablakot hoz létre, és egy valódi tálcakezelő méretezi át. Plasma Waylanden az
-        # xembedsniproxy nem méretez, ezért az ikon 1x1 pixeles (egyszínű négyzet) maradna: az ablakot itt állítjuk be.
-        _create_window = pystray.Icon._create_window
 
-        def _sized_window(self):
-            window = _create_window(self)
-            window.configure(width=TRAY_ICON_PX, height=TRAY_ICON_PX)
-            self._display.flush()
-            return window
+class App:
+    """A futó alkalmazás: a motor, a gyorsgombok, az ablak és a tálca, valamint az üzenetsor, amelyen a háttérszálak és a
+    tálcamenü a főszálnak üzennek (a Tk-t csak a főszál használhatja)."""
 
-        pystray.Icon._create_window = _sized_window
+    def __init__(self, show_event):
+        import customtkinter as ctk
+        from gui_panel import Panel
+        from gui_toast import Toast
+        from gui_tray import Tray
+        self.show_event = show_event
+        self.queue = queue.Queue()
+        auto_backup()                                   # még azelőtt, hogy az indulás bármit újraírna
+        self.eng = self._create_engine()
+        install_exception_hooks()
+        self.eng.say(f"Indul: {APP_NAME} {VERSION}")
+        self.hotkeys = Hotkeys(lambda action: self.post(("hk", action)))
+        self.hotkeys.start()
+        self.system_events = SystemEvents(self.eng.system_event)         # ébredés / kijelzőváltás után a kép visszaállítása
+        self.system_events.start()
+        ctk.set_appearance_mode("system")
+        ctk.set_default_color_theme("blue")
+        self.root = self._create_window(ctk)
+        self.overlay = OverlayController(
+            self.eng, self.root, set_hotkeys=self.hotkeys.set, foreground_mid=foreground_monitor_id,
+            rect_for=monitor_rect, hotkey_failed=lambda: self.hotkeys.failed,
+            main_visible=lambda: self.root.state() != "withdrawn")
+        self.toast = Toast(self.root, rect_for=monitor_rect)
+        self.tray = Tray(self.eng, self.post)
+        self.tray.start()
+        self.panel = Panel(self, power_plans())
+        self._handlers = {
+            "panel": self.panel.show,
+            "shortcuts": self._show_shortcuts,
+            "toast": self.toast.show,
+            "toggle": self.eng.toggle_preset,
+            "night": self._toggle_night,
+            "neutral": self.eng.neutral_all,
+            "hk": self._run_hotkey_action,
+            "monitors": self.panel.on_monitors_changed,
+            "refresh": self._on_engine_refresh,
+            "base_saved": self.panel.on_base_saved,
+        }
 
-    already, show_ev = single_instance()
-    if already:
-        signal_running(show_ev)
-        return
-    ensure_launcher()
-
-    q = queue.Queue()
-    auto_backup()                                   # még azelőtt, hogy az indulás bármit újraírna
-    eng = Engine(notify=lambda: q.put(("refresh",)))
-    eng.toast_cb = lambda text, mid: q.put(("toast", text, mid))
-    eng.monitors_cb = lambda: q.put(("monitors",))
-    first_run = not eng.set.get("migrated")
-    if first_run:
-        kill_old_watcher()
-        eng.set["migrated"] = True
-        eng.save_settings()
-    eng.save_config()
-
-    def log_exception(where, et, ev, tb):
-        write_log(f"Kezeletlen hiba ({where}):\n" + "".join(traceback.format_exception(et, ev, tb)))
-
-    sys.excepthook = lambda et, ev, tb: log_exception("főszál", et, ev, tb)
-    threading.excepthook = lambda a: log_exception(f"szál: {a.thread.name if a.thread else '?'}", a.exc_type, a.exc_value,
-                                                   a.exc_traceback)
-    eng.say(f"Indul: {APP_NAME} {VERSION}")
-    hk = Hotkeys(lambda action: q.put(("hk", action)))
-    hk.start()
-    sysev = SystemEvents(eng.system_event)         # ébredés / kijelzőváltás után a kép visszaállítása
-    sysev.start()
-
-    ctk.set_appearance_mode("system")
-    ctk.set_default_color_theme("blue")
-    root = ctk.CTk()
-    root.report_callback_exception = lambda et, ev, tb: log_exception("felület", et, ev, tb)
-    root.title(APP_NAME)
-    root.geometry("620x920")
-    root.minsize(580, 760)
-    ico = RES_DIR / "assets" / "icon.ico"
-    if ico.is_file() and sys.platform == "win32":
-        root.after(300, lambda: root.iconbitmap(str(ico)))
-    ui, cur = {}, {"mid": None, "name": None, "variant": None, "loading": False, "job": None}
-    plans = power_plans()
-    PLAN_NONE = "Nem változtat"
-
-    # ---- váz: felső sáv (monitor, preset, kapcsoló), fülek, alsó sáv
-    page = ctk.CTkFrame(root, fg_color="transparent")
-    page.pack(fill="both", expand=True, padx=18, pady=14)
-    top = ctk.CTkFrame(page, corner_radius=12)
-    top.pack(fill="x")
-    ui["mon"] = ctk.CTkSegmentedButton(top, values=[m["name"] for m in eng.mons()], command=lambda v: pick_monitor(v, ask=True))
-    ui["mon"].pack(fill="x", padx=14, pady=(12, 8))
-    pr_ = ctk.CTkFrame(top, fg_color="transparent")               # "Alkalmazás:" felirat + választó, középen
-    pr_.pack(pady=(6, 0))
-    ctk.CTkLabel(pr_, text="Alkalmazás:").pack(side="left")
-    ui["preset"] = ctk.CTkOptionMenu(pr_, values=["Alap"], width=260, anchor="center", command=lambda v: pick_preset(v))
-    ui["preset"].pack(side="left", padx=(8, 0))
-    r = ctk.CTkFrame(top, fg_color="transparent")                 # alatta a gombok egy sorban, középen
-    r.pack(pady=(12, 0))
-    ctk.CTkButton(r, text="Új…", width=76, command=lambda: new_preset_dialog(), **GREY_BUTTON).pack(side="left")
-    ctk.CTkButton(r, text="Másolás…", width=90, command=lambda: copy_preset_dialog(), **GREY_BUTTON).pack(side="left", padx=(8, 0))
-    ui["ren"] = ctk.CTkButton(r, text="Átnevezés…", width=100, command=lambda: rename_preset_dialog(), **GREY_BUTTON)
-    ui["ren"].pack(side="left", padx=(8, 0))
-    ui["del"] = ctk.CTkButton(r, text="Törlés", width=76, command=lambda: delete_preset(), **GREY_BUTTON)
-    ui["del"].pack(side="left", padx=(8, 0))
-    ui["on"] = ctk.CTkSwitch(top, text="Be van kapcsolva", command=lambda: toggle_on())              # a gombok alatt
-    ui["on"].pack(pady=(16, 16))
-
-    tabs = ctk.CTkTabview(page, corner_radius=12)
-    tabs.pack(fill="both", expand=True, pady=(10, 0))
-    for t in ("Kép", "Színek", "Játék és profil", "Éjszakai mód", "Program"):
-        tabs.add(t)
-
-    def slider(parent, caption, low, high, steps, format_value, default=None):
-        """Csúszka-sor; a változásra az `on_slider` fut (később van definiálva, ezért a hívás pillanatában oldódik fel)."""
-        return build_slider(parent, caption, low, high, steps, format_value, on_change=lambda: on_slider(), default=default)
-
-    # -- Kép
-    t1 = tabs.tab("Kép")
-    vr = ctk.CTkFrame(t1, fg_color="transparent")                 # változatok: a kiválasztott preset (alkalmazás) alatt
-    vr.pack(fill="x", pady=(8, 0))
-    vs_ = ctk.CTkFrame(vr, fg_color="transparent")                # a változat-választó középen
-    vs_.pack()
-    ctk.CTkLabel(vs_, text="Változat:").pack(side="left")
-    ui["var"] = ctk.CTkOptionMenu(vs_, values=["–"], width=260, anchor="center", command=lambda v: pick_variant(v))
-    ui["var"].pack(side="left", padx=(8, 0))
-    vb = ctk.CTkFrame(vr, fg_color="transparent")                 # alatta a 3 gomb, szintén középen
-    vb.pack(pady=(12, 0))
-    ctk.CTkButton(vb, text="Új…", width=70, command=lambda: new_variant_dialog(), **GREY_BUTTON).pack(side="left")
-    ui["vren"] = ctk.CTkButton(vb, text="Átnevezés…", width=96, command=lambda: rename_variant_dialog(), **GREY_BUTTON)
-    ui["vren"].pack(side="left", padx=(8, 0))
-    ui["vdel"] = ctk.CTkButton(vb, text="Törlés", width=70, command=lambda: delete_variant(), **GREY_BUTTON)
-    ui["vdel"].pack(side="left", padx=(8, 0))
-    vh = ctk.CTkFrame(t1, fg_color="transparent")
-    vh.pack(fill="x", pady=(22, 0))
-    ctk.CTkLabel(vh, text="Gyorsgomb (erre a változatra):", width=190, anchor="w").pack(side="left")
-    ui["vhk"] = HotkeyEntry(vh)
-    ui["vhk"].pack(side="left", padx=(8, 0))
-    ctk.CTkFrame(t1, height=1, fg_color=("gray78", "gray28")).pack(fill="x", pady=(20, 4))      # elválasztó a csúszkák előtt
-    pct = lambda v: f"{v:.0f}%"
-    ui["b"] = slider(t1, "Fényerő", 0, 100, 100, pct, default=50)
-    ui["c"] = slider(t1, "Kontraszt", 0, 100, 100, pct, default=50)
-    ui["g"] = slider(t1, "Gamma", 0.30, 2.80, 250, lambda v: f"{v:.2f}", default=1.0)   # mint az NVIDIA panelben: 0,30-2,80, alap 1,00
-    ui["v"] = slider(t1, "Digital vibrance (NVIDIA)", 0, 100, 100, pct, default=50)
-    ui["vhint"] = ctk.CTkLabel(t1, text="", anchor="w", justify="left", wraplength=560, text_color=("gray40", "gray60"))
-    br = ctk.CTkFrame(t1, fg_color="transparent")
-    br.pack(fill="x", pady=(28, 0))
-    ui["def"] = ctk.CTkButton(br, text="Preset alapértéke", width=140, command=lambda: preset_default(), **GREY_BUTTON)
-    ui["def"].pack(side="left")
-    ctk.CTkButton(br, text="Semleges kép", width=120, command=lambda: neutral_now(), **GREY_BUTTON).pack(side="left", padx=(8, 0))
-    ui["cmp"] = ctk.CTkButton(br, text="Összehasonlítás (nyomva tartva)", width=210, **GREY_BUTTON)
-    ui["cmp"].pack(side="left", padx=(8, 0))
-    ui["cmp"].bind("<ButtonPress-1>", lambda e: compare(True), add="+")
-    ui["cmp"].bind("<ButtonRelease-1>", lambda e: compare(False), add="+")
-    ctk.CTkLabel(t1, text="Amíg ez az ablak nyitva van, a csúszkák élőben hatnak, de mentés nélkül bezárva a mentett "
-                          "állapot tér vissza. A \"Be van kapcsolva\" kapcsoló ettől független: az marad, ami be van kapcsolva.\n"
-                          "Az érték a csúszka melletti mezőbe be is írható; dupla kattintás a csúszkán az alapértékre állítja.",
-                 text_color=MUTED_TEXT, wraplength=520, justify="left").pack(anchor="w", pady=(20, 0))
-
-    # -- Színek: R/G/B csatornák erősítése (100% = semleges; csökkentve az adott szín halványodik)
-    t1b = tabs.tab("Színek")
-    ui["cr"] = slider(t1b, "Vörös", 0, 100, 100, pct, default=100)
-    ui["cg"] = slider(t1b, "Zöld", 0, 100, 100, pct, default=100)
-    ui["cb"] = slider(t1b, "Kék", 0, 100, 100, pct, default=100)
-    ctk.CTkButton(t1b, text="Színek visszaállítása (100%)", width=210, command=lambda: reset_colors(), **GREY_BUTTON).pack(
-        anchor="w", pady=(28, 0))
-    ctk.CTkLabel(t1b, text="Csatornánként csökkentheted az erősítést: kevesebb kékkel melegebb, kevesebb vörössel "
-                           "hidegebb a kép. 100% a semleges. A beállítás a kiválasztott változaté (vagy az alkalmazásé, ha nincs "
-                           "változata), és együtt mentődik a többivel; az éjszakai mód ráteszi a magáét.",
-                 text_color=MUTED_TEXT, wraplength=520, justify="left").pack(anchor="w", pady=(20, 0))
-
-    # -- Játék és profil
-    t2 = tabs.tab("Játék és profil")
-
-    section_title(t2, "Automatikus bekapcsolás")
-    pr = ctk.CTkFrame(t2, fg_color="transparent")
-    pr.pack(fill="x")
-    ui["proc"] = ctk.CTkEntry(pr, width=200, placeholder_text="a játék exe-ja, pl. bf6")
-    ui["proc"].pack(side="left")
-    ctk.CTkButton(pr, text="Futó programok…", width=130, command=lambda: running_dialog(), **GREY_BUTTON).pack(side="left", padx=(8, 0))
-    ctk.CTkButton(pr, text="Tallózás…", width=90, command=lambda: browse_exe(), **GREY_BUTTON).pack(side="left", padx=(8, 0))
-    ctk.CTkLabel(t2, text="Ha ez a program elindul, a preset magától bekapcsol; kilépéskor kikapcsol. Üresen hagyva csak kézzel.",
-                 text_color=MUTED_TEXT, wraplength=520, justify="left").pack(anchor="w", pady=(4, 0))
-    section_title(t2, "Gyorsgomb (be- és kikapcsolja a presetet)")
-    ui["hotkey"] = HotkeyEntry(t2)
-    ui["hotkey"].pack(anchor="w")
-    section_title(t2, "Profil: amikor a preset bekapcsol…")
-    r2 = ctk.CTkFrame(t2, fg_color="transparent")
-    r2.pack(fill="x")
-    ctk.CTkLabel(r2, text="Energiaprofil:", width=100, anchor="w").pack(side="left")
-    ui["power"] = ctk.CTkOptionMenu(r2, values=[PLAN_NONE] + [n for _, n, _ in plans], width=240)
-    ui["power"].pack(side="left")
-    r3 = ctk.CTkFrame(t2, fg_color="transparent")
-    r3.pack(fill="x", pady=(8, 0))
-    ctk.CTkLabel(r3, text="RGB:", width=100, anchor="w").pack(side="left")
-    ui["rgb"] = RgbPicker(r3)
-    ui["rgb"].pack(side="left")
-    ctk.CTkLabel(t2, text="Kikapcsoláskor az energiaprofil visszaáll az előzőre, az RGB pedig az \"alap\" állapotra "
-                          "(Program fül). A JBL EQ innen nem váltható, azt a JBL alkalmazás játékfelismerése kezeli.",
-                 text_color=MUTED_TEXT, wraplength=520, justify="left").pack(anchor="w", pady=(8, 0))
-
-    # -- Éjszakai mód
-    t3 = tabs.tab("Éjszakai mód")
-    ui["night"] = ctk.CTkSwitch(t3, text="Éjszakai mód bekapcsolva", command=lambda: night_click())
-    ui["night"].pack(anchor="w", pady=(10, 0))
-    ui["ns"] = slider(t3, "Erősség (melegebb, halványabb kép)", 0, 100, 100, pct, default=60)
-    section_title(t3, "Gyorsgomb")
-    ui["nhk"] = HotkeyEntry(t3, on_change=lambda t: set_setting("night_hotkey", t))
-    ui["nhk"].pack(anchor="w")
-    ctk.CTkLabel(t3, text="A kapcsoló monitoronként külön működik: mindig a fent kiválasztott monitort érinti (a tálcamenüben "
-                          "minden monitornál van külön, és van egy \"minden monitor\" is). A gyorsgomb az összes monitort "
-                          "együtt kapcsolja: ha bárhol be van kapcsolva, mindenhol kikapcsol.\n"
-                          "Csak akkor kapcsol be, ha te bekapcsolod; a program újraindításakor mindig kikapcsolt. Játék alatt "
-                          "(ha annak a presetje be van kapcsolva az adott monitoron) szünetel, hogy a színek ne torzuljanak.",
-                 text_color=MUTED_TEXT, wraplength=520, justify="left").pack(anchor="w", pady=(14, 0))
-
-    # -- Program
-    t4 = tabs.tab("Program")
-    ui["auto"] = ctk.CTkSwitch(t4, text=f"Indítás a {'Windows-szal' if sys.platform == 'win32' else 'rendszerrel'} (tálcán, ablak nélkül)", command=lambda: auto_click())
-    ui["auto"].pack(anchor="w", pady=(10, 0))
-    ui["toast"] = ctk.CTkSwitch(t4, text="Értesítés a képernyőn váltáskor (a játék fölött is)", command=lambda: toast_click())
-    ui["toast"].pack(anchor="w", pady=(10, 0))
-    tr = ctk.CTkFrame(t4, fg_color="transparent")
-    tr.pack(fill="x", pady=(6, 0))
-    ctk.CTkButton(tr, text="Értesítés próbája", width=140, command=lambda: show_toast("Értesítés próba", cur["mid"]),
-                  **GREY_BUTTON).pack(side="left")
-    ctk.CTkLabel(tr, text="Teljes képernyős (exkluzív) módú játék fölött nem látszik; ablak nélküli módban igen.",
-                 text_color=MUTED_TEXT, wraplength=360, justify="left").pack(side="left", padx=(10, 0))
-    section_title(t4, "Gyorsgomb: változat léptetése (az éppen aktív játék következő változatára)")
-    ui["chk"] = HotkeyEntry(t4, on_change=lambda t: set_setting("cycle_hotkey", t))
-    ui["chk"].pack(anchor="w")
-    ctk.CTkLabel(t4, text="Egy gomb minden játéknál: azon a monitoron, ahol aktív a preset, a következő változatra lép, "
-                          "az utolsó után újra az elsőre. Ha a presetnek nincsenek változatai, nem csinál semmit.",
-                 text_color=MUTED_TEXT, wraplength=520, justify="left").pack(anchor="w", pady=(4, 0))
-    section_title(t4, "Gyorsgomb: játék-overlay (az aktuális játék profilja a játék fölött)")
-    ui["ovhk"] = HotkeyEntry(t4, on_change=lambda t: set_setting("overlay_hotkey", t))
-    ui["ovhk"].pack(anchor="w")
-    ctk.CTkLabel(t4, text="Ugyanaz a gomb nyitja és zárja. Nyitva: ↑↓ sor, ←→ állít (Shift: ×5), Del alapérték, Enter mentés, "
-                          "N új változat a mostani állásból, Esc elvet. Amíg nyitva van, ezek a gombok nem jutnak el a játékhoz.",
-                 text_color=MUTED_TEXT, wraplength=520, justify="left").pack(anchor="w", pady=(4, 0))
-    section_title(t4, "Gyorsgomb: semleges kép (minden kikapcsol)")
-    ui["nehk"] = HotkeyEntry(t4, on_change=lambda t: set_setting("neutral_hotkey", t))
-    ui["nehk"].pack(anchor="w")
-    section_title(t4, "RGB alapállapot (ide áll vissza, ha egy profil kikapcsol)")
-    ui["base"] = RgbPicker(t4, on_change=lambda s: set_setting("base_rgb", s))
-    ui["base"].pack(anchor="w")
-    ctk.CTkButton(t4, text="A mostani RGB-állapot mentése alapnak", width=270, command=lambda: save_base_rgb(), **GREY_BUTTON).pack(
-        anchor="w", pady=(8, 0))
-    section_title(t4, "Mentés és visszatöltés")
-    bk = ctk.CTkFrame(t4, fg_color="transparent")
-    bk.pack(fill="x")
-    ctk.CTkButton(bk, text="Exportálás…", width=120, command=lambda: export_all(), **GREY_BUTTON).pack(side="left")
-    ctk.CTkButton(bk, text="Importálás…", width=120, command=lambda: import_all(), **GREY_BUTTON).pack(side="left", padx=(8, 0))
-    ctk.CTkLabel(t4, text=f"Az összes preset és beállítás egy fájlba. A program naponta egyszer maga is másolatot készít "
-                          f"(utolsó 10 marad): {BACKUP_DIR}", text_color=MUTED_TEXT, wraplength=520, justify="left").pack(
-        anchor="w", pady=(6, 0))
-    lg = ctk.CTkFrame(t4, fg_color="transparent")
-    lg.pack(fill="x", pady=(14, 0))
-    ctk.CTkButton(lg, text="Napló megnyitása", width=140, command=lambda: open_path(LOG_FILE), **GREY_BUTTON).pack(side="left")
-    ctk.CTkButton(lg, text="Adatmappa megnyitása", width=160, command=lambda: open_path(DATA_DIR), **GREY_BUTTON).pack(
-        side="left", padx=(8, 0))
-    ui["info"] = ctk.CTkLabel(t4, text="", text_color=MUTED_TEXT, wraplength=520, justify="left")
-    ui["info"].pack(anchor="w", pady=(14, 0))
-
-    # -- alsó sáv
-    bot = ctk.CTkFrame(page, fg_color="transparent")
-    bot.pack(side="bottom", fill="x", pady=(10, 0))                # alulra rögzítve: kis ablaknál sem csúszhat ki
-    ctk.CTkButton(bot, text="Mentés a presetbe", width=160, command=lambda: save_preset()).pack(side="left")
-    ui["dirty"] = ctk.CTkLabel(bot, text="", text_color=("#b45309", "#f59e0b"), width=150, anchor="w")   # mentetlen módosítás jelzése
-    ui["dirty"].pack(side="left", padx=(12, 0))
-    ui["status"] = ctk.CTkLabel(bot, text="", text_color=MUTED_TEXT, anchor="w", wraplength=240, justify="left")
-    ui["status"].pack(side="left", padx=12)
-    tabs.pack_forget()                                              # a fülek az alsó sáv UTÁN kapjanak helyet
-    tabs.pack(fill="both", expand=True, pady=(10, 0))
-
-    # ---- logika
-    def status(text):
-        ui["status"].configure(text=text)
-
-    def mon_by_name(name):
-        return next((m for m in eng.mons() if m["name"] == name), eng.mons()[0])
-
-    # A gamma-csúszka az NVIDIA-panel skáláján megy (1,00 = semleges); a mentett/belső érték marad a régi
-    # (2,2 = semleges), így a meglévő presetek nem változnak: belső = csúszka * 2,2.
-    def set_slider(k, v):
-        ui[k][0].set(v / 2.2 if k == "g" else v)
-
-    def vals_now():
-        return (round(round(ui["g"][0].get(), 2) * 2.2, 4), round(ui["c"][0].get()), round(ui["b"][0].get()), round(ui["v"][0].get()))
-
-    def gains_now():
-        return [round(ui[k][0].get()) for k in ("cr", "cg", "cb")]
-
-    def set_gains(gain):
-        for k, val in zip(("cr", "cg", "cb"), gain):
-            ui[k][0].set(val)
-
-    def update_labels():
-        for k in ("g", "c", "b", "v", "cr", "cg", "cb"):
-            sl, lbl, fmt = ui[k]
-            lbl.configure(text=fmt(sl.get()))
-        ui["ns"][1].configure(text=ui["ns"][2](ui["ns"][0].get()))
-
-    def reset_colors():
-        set_gains([100, 100, 100])
-        on_slider()
-
-    def on_slider():
-        update_labels()
-        if cur["loading"]:
-            return
-        if cur["job"]:
-            root.after_cancel(cur["job"])
-        cur["job"] = root.after(40, do_preview)
-
-    def do_preview():
-        cur["job"] = None
-        ok = eng.preview(cur["mid"], vals_now(), gains_now())
-        status("" if ok else "Hiba: a monitor nem található vagy nem sikerült beállítani.")
-
-    def load_preset(name):
-        mid = cur["mid"]
-        p = eng.preset(mid, name)
-        if p is None:
-            return
-        cur["name"], cur["loading"] = name, True
-        cur["variant"] = eng.cur_variant(mid, name)
-        ui["preset"].set(name)
-        for k, val in zip("gcbv", pvals(p, cur["variant"])):
-            set_slider(k, val)
-        set_gains(pgain(p, cur["variant"]))
-        refresh_variant_ui(p)
-        ui["proc"].delete(0, "end")
-        if p.get("process"):
-            ui["proc"].insert(0, p["process"])
-        ui["hotkey"].set(p.get("hotkey", ""))
-        plan = next((n for g, n, _ in plans if g == p.get("power")), PLAN_NONE)
-        ui["power"].set(plan)
-        ui["rgb"].set(p.get("rgb"))
-        ui["def"].configure(state="normal" if p.get("default") else "disabled")
-        ui["del"].configure(state="disabled" if name == "Alap" else "normal")
-        ui["ren"].configure(state="disabled" if name == "Alap" else "normal")
-        cur["loading"] = False
-        update_labels()
-        sync_switches()
-        mark_clean()
-
-    def sync_switches():
-        on = eng.active.get(cur["mid"]) == cur["name"]
-        ui["on"].select() if on else ui["on"].deselect()
-        ui["night"].select() if cur["mid"] in eng.night_mons else ui["night"].deselect()
-        ui["night"].configure(text="Éjszakai mód ezen a monitoron: " + (eng.mon(cur["mid"]) or {}).get("name", ""))
-
-    # -- mentetlen módosítások: az alapállapot a legutóbbi betöltés/mentés utáni felület (collect()), ehhez hasonlítunk
-    def mark_clean():
-        cur["base"] = collect()
-        ui["dirty"].configure(text="")
-
-    def is_dirty():
-        return bool(cur.get("name")) and cur.get("base") is not None and collect() != cur["base"]
-
-    def confirm_discard():
-        return (not is_dirty()) or messagebox.askyesno(
-            APP_NAME, "Mentetlen módosításaid vannak ezen a presetten.\nEldobod őket?", parent=root)
-
-    def poll_dirty():
-        try:
-            if root.state() != "withdrawn":
-                ui["dirty"].configure(text="● Mentetlen módosítás" if is_dirty() else "")
-        except Exception:
-            pass
-        root.after(400, poll_dirty)
-
-    def update_vibrance_state():
-        """A vibrance-csúszka csak ott aktív, ahol hat; máshol szürke, az okkal."""
-        ok, hint = eng.display.vibrance_state(find_dev(cur["mid"]))
-        for w in (ui["v"][0], ui["v"][1]):
-            w.configure(state="normal" if ok else "disabled")
-        if ok:
-            ui["vhint"].pack_forget()
-        else:
-            ui["vhint"].configure(text=hint)
-            ui["vhint"].pack(fill="x", pady=(6, 0), before=br)
-
-    def pick_monitor(name, ask=False):
-        if ask and mon_by_name(name)["id"] != cur["mid"] and not confirm_discard():
-            ui["mon"].set(mon_by_name(next((m["name"] for m in eng.cfg["monitors"] if m["id"] == cur["mid"]), name))["name"])
-            return
-        m = mon_by_name(name)
-        cur["mid"] = m["id"]
-        ui["mon"].set(m["name"])
-        ui["preset"].configure(values=list(m["presets"]))
-        load_preset(eng.active.get(m["id"]) or "Alap")
-        update_vibrance_state()
-        do_preview()
-
-    def pick_preset(name):
-        if name != cur["name"] and not confirm_discard():
-            ui["preset"].set(cur["name"])
-            return
-        load_preset(name)
-        do_preview()
-
-    def refresh_variant_ui(p):
-        vs = p.get("variants") or {}
-        names = list(vs)
-        ui["var"].configure(values=names or ["–"], state="normal" if names else "disabled")
-        ui["var"].set(cur["variant"] if names else "–")
-        ui["vren"].configure(state="normal" if names else "disabled")
-        ui["vdel"].configure(state="normal" if len(names) > 1 else "disabled")
-        ui["vhk"].set((vs.get(cur["variant"]) or {}).get("hotkey", "") if names else "")
-
-    def pick_variant(vn, ask=True):
-        p = eng.preset(cur["mid"], cur["name"]) or {}
-        if vn not in (p.get("variants") or {}):
-            return
-        if ask and vn != cur["variant"] and not confirm_discard():
-            ui["var"].set(cur["variant"])
-            return
-        cur["variant"] = vn
-        eng.variant[(cur["mid"], cur["name"])] = vn       # a panel bezárása után is ez a változat marad érvényben
-        cur["loading"] = True
-        for k, val in zip("gcbv", pvals(p, vn)):
-            set_slider(k, val)
-        set_gains(pgain(p, vn))
-        cur["loading"] = False
-        ui["vhk"].set(p["variants"][vn].get("hotkey", ""))
-        update_labels()
-        do_preview()
-        mark_clean()
-
-    def ask_variant_name(text, title):
-        raw_name = ctk.CTkInputDialog(text=text, title=title).get_input()
-        existing = (eng.preset(cur["mid"], cur["name"]) or {}).get("variants") or {}
-        name, error = preset_ops.clean_name(raw_name, existing, "változat")
-        if error:
-            status(error)
-        return name
-
-    def new_variant_dialog():
-        mid, name = cur["mid"], cur["name"]
-        preset = eng.preset(mid, name)
-        variant_name = ask_variant_name("Az új változat neve (pl. a pálya):", "Új változat")
-        if not preset or not variant_name:
-            return
-        # az új változat a mostani csúszkaállásból indul
-        error = preset_ops.add_variant(eng, mid, name, variant_name, preset_ops.values_dict(*vals_now(), gains_now()))
-        if error:
-            status(error)
-            return
-        cur["variant"] = variant_name
-        refresh_variant_ui(preset)
-        ui["vhk"].set("")
-        mark_clean()
-        status(f"Új változat: {variant_name} (az értékei a mostani csúszkaállásból indultak)")
-
-    def rename_variant_dialog():
-        mid, name, old_name = cur["mid"], cur["name"], cur["variant"]
-        preset = eng.preset(mid, name)
-        if not preset or not old_name:
-            return
-        new_name = ask_variant_name(f"A(z) '{old_name}' változat új neve:", "Változat átnevezése")
-        if not new_name:
-            return
-        preset_ops.rename_variant(eng, mid, name, old_name, new_name)
-        cur["variant"] = new_name
-        apply_hotkeys()                               # a gyorsgomb-azonosító tartalmazza a változat nevét
-        refresh_variant_ui(preset)
-        mark_clean()
-        status(f"Átnevezve: {old_name} → {new_name}")
-
-    def delete_variant():
-        mid, name, variant_name = cur["mid"], cur["name"], cur["variant"]
-        preset = eng.preset(mid, name)
-        if not preset or len(preset.get("variants") or {}) < 2 or not messagebox.askyesno(
-                APP_NAME, f"Törlöd a(z) '{variant_name}' változatot?", parent=root):
-            return
-        cur["variant"] = preset_ops.delete_variant(eng, mid, name, variant_name)
-        apply_hotkeys()
-        refresh_variant_ui(preset)
-        pick_variant(cur["variant"], ask=False)
-        eng.sync(mid)
-        status(f"Törölve: {variant_name}")
-
-    def collect():
-        p = json.loads(json.dumps(eng.preset(cur["mid"], cur["name"]) or {}))        # mély másolat: a mentésig az eredeti nem változik
-        g, c, b, v = vals_now()
-        gn = gains_now()
-        p.update(gamma=g, contrast=c, brightness=b, vibrance=v, gain=gn,
-                 process=re.sub(r"(?i)\.exe$", "", ui["proc"].get().strip()))
-        vs = p.get("variants")
-        if vs and cur["variant"] in vs:
-            vs[cur["variant"]].update(gamma=g, contrast=c, brightness=b, vibrance=v, gain=gn)
-            vhk = ui["vhk"].get()
-            if vhk:
-                vs[cur["variant"]]["hotkey"] = vhk
-            else:
-                vs[cur["variant"]].pop("hotkey", None)
-            mirror_first(p)
-        for key, val in (("hotkey", ui["hotkey"].get()),
-                         ("power", next((g_ for g_, n, _ in plans if n == ui["power"].get()), "")),
-                         ("rgb", ui["rgb"].get())):
-            if val and not (key == "rgb" and val.get("mode") == "none"):
-                p[key] = val
-            else:
-                p.pop(key, None)
-        return p
-
-    def save_preset():
-        mid, name = cur["mid"], cur["name"]
-        p = collect()
-        eng.mon(mid)["presets"][name] = p
-        if cur.get("variant") in (p.get("variants") or {}):
-            eng.variant[(mid, name)] = cur["variant"]         # a mentett változat lesz az érvényes
+    def _create_engine(self):
+        eng = Engine(notify=lambda: self.post(("refresh",)))
+        eng.toast_cb = lambda text, monitor_id: self.post(("toast", text, monitor_id))
+        eng.monitors_cb = lambda: self.post(("monitors",))
+        if not eng.set.get("migrated"):
+            kill_old_watcher()
+            eng.set["migrated"] = True
+            eng.save_settings()
         eng.save_config()
-        apply_hotkeys()
-        was_on = eng.active.get(mid) == name
-        if was_on:
-            eng.sync(mid)
+        return eng
+
+    def _create_window(self, ctk):
+        root = ctk.CTk()
+        root.report_callback_exception = lambda exc_type, exc_value, exc_traceback: log_exception(
+            "felület", exc_type, exc_value, exc_traceback)
+        root.title(APP_NAME)
+        root.geometry(WINDOW_SIZE)
+        root.minsize(*WINDOW_MIN_SIZE)
+        icon_file = RES_DIR / "assets" / "icon.ico"
+        if icon_file.is_file() and sys.platform == "win32":
+            root.after(ICON_LOAD_DELAY_MS, lambda: root.iconbitmap(str(icon_file)))
+        return root
+
+    # ---- a Panel és a Tray szolgáltatásai
+
+    def post(self, message):
+        """Üzenet a főszálnak (bármely szálról hívható)."""
+        self.queue.put(message)
+
+    def apply_hotkeys(self):
+        self.hotkeys.set(self.eng.hotkey_map())
+
+    def refresh_tray(self):
+        self.tray.refresh()
+
+    # ---- indítás és főciklus
+
+    def run(self, start_hidden):
+        self.panel.start()
+        self.eng.sync()                            # induláskor ismert (semleges) állapot
+        threading.Thread(target=self.eng.fx_loop, daemon=True).start()
+        threading.Thread(target=lambda: self.eng.watch_loop(start_process_events), daemon=True).start()
+        threading.Thread(target=self._wait_for_second_launch, daemon=True).start()
+        self.apply_hotkeys()
+        self.pump()
+        self.overlay_tick()
+        HOOK.update(root=self.root, eng=self.eng, panel=self.panel, toast=self.toast, overlay=self.overlay,
+                    hotkeys=self.hotkeys)          # csak az automatikus tesztek használják
+        if start_hidden:
+            self.root.withdraw()
         else:
-            eng.set_active(mid, name, True)   # mentéskor a preset be is kapcsol: ami a képernyőn van, az marad bezárás után is
-        do_preview()                  # amíg a panel nyitva van, a kép a csúszkákat kövesse (a sync az éjszakaira ugrasztana)
-        sync_switches()
-        refresh_tray()
-        mark_clean()
-        status(f"Mentve: {name}" + ("" if was_on else " – bekapcsolva") +
-               (f" – a gyorsgomb ({p['hotkey']}) foglalt, másikat válassz" if
-                p.get("hotkey") and f"p|{mid}|{name}" in hk.failed else ""))
+            self.panel.show()
+        self.root.mainloop()
 
-    def ask_name(text, title):
-        """Új preset-nevet kér; None, ha mégse, üres vagy már foglalt."""
-        raw_name = ctk.CTkInputDialog(text=text, title=title).get_input()
-        name, error = preset_ops.clean_name(raw_name, eng.mon(cur["mid"])["presets"], "preset")
-        if error:
-            status(error)
-        return name
+    def _wait_for_second_launch(self):
+        while not self.eng.stop:
+            if show_signaled(self.show_event, SHOW_SIGNAL_TIMEOUT_MS, lambda action: self.post(("hk", action))):
+                self.post(("panel",))              # a második indítás jelzett: az ablak elő
 
-    def add_preset(n, p, msg):
-        eng.mon(cur["mid"])["presets"][n] = p
-        eng.save_config()
-        ui["preset"].configure(values=list(eng.mon(cur["mid"])["presets"]))
-        load_preset(n)
-        status(msg)
-        refresh_tray()
-
-    def new_preset_dialog():
-        name = ask_name("Az új preset neve:", "Új preset")
-        if not name:
-            return
-        process = re.sub(r"(?i)\.exe$", "", ui["proc"].get().strip())
-        add_preset(name, preset_ops.blank_preset((*vals_now(), gains_now()), process), f"Létrehozva: {name}")
-
-    def copy_preset_dialog():
-        source_name = cur["name"]
-        name = ask_name(f"A(z) '{source_name}' másolatának neve:", "Preset másolása")
-        if not name:
-            return
-        copy = preset_ops.copy_of_preset(collect(), (*vals_now(), gains_now()))      # a mostani csúszkaállással, energia/RGB profillal
-        add_preset(name, copy, f"Másolva: {source_name} → {name} (gyorsgomb és játék nélkül)")
-
-    def rename_preset_dialog():
-        mid, old_name = cur["mid"], cur["name"]
-        if old_name == "Alap":
-            return
-        new_name = ask_name(f"A(z) '{old_name}' új neve:", "Preset átnevezése")
-        if not new_name:
-            return
-        preset_ops.rename_preset(eng, mid, old_name, new_name)
-        cur["name"] = new_name
-        apply_hotkeys()                               # a gyorsgomb-azonosító tartalmazza a preset nevét
-        ui["preset"].configure(values=list(eng.mon(mid)["presets"]))
-        ui["preset"].set(new_name)
-        refresh_tray()
-        status(f"Átnevezve: {old_name} → {new_name}")
-
-    def export_all():
-        file_name = filedialog.asksaveasfilename(title="Presetek exportálása", defaultextension=".json",
-                                                 initialfile=f"kepprofil-mentes-{time.strftime('%Y-%m-%d')}.json",
-                                                 filetypes=[("Képprofil mentés", "*.json")])
-        if not file_name:
-            return
-        try:
-            Path(file_name).write_text(json.dumps(preset_ops.export_data(eng), ensure_ascii=False, indent=4),
-                                       encoding="utf-8")
-            status(f"Exportálva: {file_name}")
-        except OSError as e:
-            status(f"Nem sikerült exportálni: {e.__class__.__name__}")
-
-    def import_all():
-        file_name = filedialog.askopenfilename(title="Presetek importálása", filetypes=[("Képprofil mentés", "*.json")])
-        if not file_name:
-            return
-        data = _read_json(Path(file_name), None)
-        config = preset_ops.importable_config(data)
-        if config is None:
-            status("Ez a fájl nem Képprofil-mentés (vagy sérült), nem importáltam.")
-            return
-        if not messagebox.askyesno(APP_NAME, "Az importálás felülírja az összes mostani presetet, gyorsgombot és az "
-                                   "éjszakai mód beállításait.\nA mostani állapotról előbb biztonsági mentés készül "
-                                   "(backup mappa). Folytatod?", parent=root):
-            return
-        preset_ops.import_config(eng, data, config,
-                                 BACKUP_DIR / f"presets-{time.strftime('%Y-%m-%d_%H%M%S')}-import-elott.json")
-        ui["mon"].configure(values=[m["name"] for m in eng.mons()])
-        ui["ns"][0].set(eng.set["night_strength"])
-        eng.set_night_strength(eng.set["night_strength"])
-        ui["nhk"].set(eng.set.get("night_hotkey", ""))
-        ui["nehk"].set(eng.set.get("neutral_hotkey", ""))
-        ui["chk"].set(eng.set.get("cycle_hotkey", ""))
-        ui["ovhk"].set(eng.set.get("overlay_hotkey", ""))
-        ui["base"].set(eng.set.get("base_rgb"))
-        ui["toast"].select() if eng.set.get("toast", True) else ui["toast"].deselect()
-        apply_hotkeys()
-        eng.sync()
-        pick_monitor(eng.mons()[0]["name"])
-        refresh_tray()
-        status("Importálva: a presetek és beállítások betöltve.")
-
-    def delete_preset():
-        mid, name = cur["mid"], cur["name"]
-        if name == "Alap" or not messagebox.askyesno(APP_NAME, f"Törlöd a(z) '{name}' presetet?", parent=root):
-            return
-        preset_ops.delete_preset(eng, mid, name)
-        apply_hotkeys()
-        pick_monitor(eng.mon(mid)["name"])
-        status(f"Törölve: {name}")
-        refresh_tray()
-
-    def toggle_on():
-        eng.set_active(cur["mid"], cur["name"], bool(ui["on"].get()))
-
-    def preset_default():
-        d = (eng.preset(cur["mid"], cur["name"]) or {}).get("default")
-        if not d:
-            return
-        cur["loading"] = True
-        for k, key in (("g", "gamma"), ("c", "contrast"), ("b", "brightness"), ("v", "vibrance")):
-            set_slider(k, d.get(key, 2.2 if k == "g" else 50))
-        set_gains(d.get("gain") or [100, 100, 100])
-        cur["loading"] = False
-        update_labels()
-        do_preview()
-        status("A preset alapértékei betöltve (a mentéshez nyomd meg a Mentés gombot).")
-
-    def neutral_now():
-        cur["loading"] = True
-        for k, v in zip("gcbv", NEUTRAL):
-            set_slider(k, v)
-        set_gains([100, 100, 100])
-        cur["loading"] = False
-        update_labels()
-        eng.show_neutral(cur["mid"])
-        status("Semleges kép (gamma 1,00, vibrance 50, színek 100%), a presetek nem változtak.")
-
-    def compare(down):
-        eng.hold = down
-        if down:
-            eng.show_neutral(cur["mid"])
-        else:
-            do_preview()
-
-    def running_dialog():
-        top_ = ctk.CTkToplevel(root)
-        top_.title("Futó programok")
-        top_.geometry("460x460")
-        top_.transient(root)
-        top_.after(150, top_.grab_set)
-        ctk.CTkLabel(top_, text="Indítsd el a játékot, majd válaszd ki a listából:").pack(anchor="w", padx=16, pady=(14, 6))
-        lst = ctk.CTkScrollableFrame(top_)
-        lst.pack(fill="both", expand=True, padx=16)
-        choice = ctk.StringVar(value="")
-        for name, title in visible_programs().items():
-            ctk.CTkRadioButton(lst, text=f"{name}   —   {title[:48]}", variable=choice, value=name).pack(anchor="w", pady=3)
-
-        def ok():
-            if choice.get():
-                ui["proc"].delete(0, "end")
-                ui["proc"].insert(0, choice.get())
-            top_.destroy()
-
-        foot = ctk.CTkFrame(top_, fg_color="transparent")
-        foot.pack(fill="x", padx=16, pady=12)
-        ctk.CTkButton(foot, text="Kiválaszt", width=100, command=ok).pack(side="right")
-        ctk.CTkButton(foot, text="Mégse", width=90, command=top_.destroy, **GREY_BUTTON).pack(side="right", padx=8)
-
-    def shortcuts_dialog():
-        """Gyorsbillentyű-súgó (Linux): minden akció kész parancsa másolható, és a KDE Gyorsbillentyűk panel megnyitható."""
-        top_ = ctk.CTkToplevel(root)
-        top_.title("Gyorsbillentyűk (KDE)")
-        top_.geometry("760x520")
-        ctk.CTkLabel(top_, justify="left", anchor="w", wraplength=720,
-                     text="Waylanden a program nem tud globális gyorsgombot figyelni, ezért a KDE köti a billentyűt a parancshoz: "
-                          "Rendszerbeállítások → Gyorsbillentyűk → Új hozzáadása → Parancs vagy szkript. "
-                          "Másold ki az alábbi parancsot, és rendelj hozzá billentyűkombinációt.").pack(
-            fill="x", padx=16, pady=(14, 6))
-        ctk.CTkButton(top_, text="KDE Gyorsbillentyűk megnyitása", command=lambda: open_shortcut_settings() or status(
-            "Nem található a systemsettings / kcmshell6.")).pack(anchor="w", padx=16, pady=(0, 8))
-        lst = ctk.CTkScrollableFrame(top_)
-        lst.pack(fill="both", expand=True, padx=16, pady=(0, 14))
-        rows = [("Éjszakai mód (minden monitor)", "night"), ("Semleges kép (minden kikapcsol)", "neutral")]
-        rows.append(("Következő változat (az aktív játéknál, minden monitoron)", "cycle"))
-        for m in eng.mons():
-            for name, p in m["presets"].items():
-                rows.append((f"{m['name']} – {name}", build_action("preset", m["id"], name)))
-                if p.get("variants"):
-                    rows += [(f"{m['name']} – {name}: {vn}", build_action("variant", m["id"], name, vn)) for vn in p["variants"]]
-
-        def copy(cmd, btn):
-            root.clipboard_clear()
-            root.clipboard_append(cmd)
-            root.update()
-            btn.configure(text="Másolva")
-            top_.after(1500, lambda: btn.winfo_exists() and btn.configure(text="Másol"))
-
-        for label, action in rows:
-            if action is None:
-                continue
-            cmd = action_command(action)
-            ctk.CTkLabel(lst, text=label, anchor="w", font=ctk.CTkFont(weight="bold")).pack(fill="x", pady=(8, 0))
-            line = ctk.CTkFrame(lst, fg_color="transparent")
-            line.pack(fill="x")
-            e = ctk.CTkEntry(line)
-            e.insert(0, cmd)
-            e.configure(state="readonly")
-            e.pack(side="left", fill="x", expand=True)
-            b = ctk.CTkButton(line, text="Másol", width=70)
-            b.configure(command=lambda c=cmd, b_=b: copy(c, b_))
-            b.pack(side="left", padx=(6, 0))
-        top_.after(100, top_.lift)
-
-    def browse_exe():
-        f = filedialog.askopenfilename(title="Válaszd ki a játék .exe fájlját", filetypes=[("Programok", "*.exe")])
-        if f:
-            ui["proc"].delete(0, "end")
-            ui["proc"].insert(0, Path(f).stem)
-
-    def night_click():
-        if bool(ui["night"].get()) != (cur["mid"] in eng.night_mons):
-            eng.toggle_night(cur["mid"])
-
-    def set_setting(key, value):
-        eng.set[key] = value
-        eng.save_settings()
-        if key.endswith("hotkey"):
-            apply_hotkeys()
-
-    def open_path(p):
-        try:
-            if not p.exists() and p.suffix:
-                p.parent.mkdir(parents=True, exist_ok=True)
-                p.touch()
-            open_native(p)
-        except OSError as e:
-            status(f"Nem sikerült megnyitni: {e.__class__.__name__}")
-
-    def auto_click():
-        set_autostart(bool(ui["auto"].get()))
-
-    def toast_click():
-        set_setting("toast", bool(ui["toast"].get()))
-
-    toast_state = {"win": None, "job": None}
-
-    def show_toast(text, mid=None):
-        """Kattintható-átlátszó, fókuszt nem lopó, mindig felül lévő felirat a monitor tetején (a játék fölött is)."""
-        import tkinter as tk
-        if toast_state["job"]:
-            root.after_cancel(toast_state["job"])
-        if toast_state["win"] is not None:
-            try:
-                toast_state["win"].destroy()
-            except Exception:
-                pass
-        bg = "#14161a"
-        w = tk.Toplevel(root)
-        toast_state["win"] = w
-        w.withdraw()
-        w.overrideredirect(True)
-        w.configure(bg=bg)
-        w.attributes("-topmost", True)
-        w.attributes("-alpha", 0.0)
-        tk.Label(w, text="KÉPPROFIL", fg="#7fb2ff", bg=bg, font=("Segoe UI", 9, "bold")).pack(padx=28, pady=(12, 0))
-        tk.Label(w, text=text, fg="#ffffff", bg=bg, font=("Segoe UI", 20, "bold")).pack(padx=28, pady=(0, 14))
-        w.update_idletasks()
-        ww, wh = w.winfo_reqwidth(), w.winfo_reqheight()
-        l, t, r, b = monitor_rect(mid) or (0, 0, w.winfo_screenwidth(), w.winfo_screenheight())
-        w.geometry(f"{ww}x{wh}+{l + (r - l - ww) // 2}+{t + int((b - t) * 0.06)}")
-        w.deiconify()
-        w.update_idletasks()
-        try:                                                  # átkattintható, nem aktiválódik, nincs tálcagomb
-            overlay_style(w)
-        except Exception:
-            pass
-
-        def fade(step):
-            if toast_state["win"] is not w:
-                return
-            a = min(0.92, step * 0.23) if step < 5 else (0.92 if step < 5 + 18 else max(0.0, 0.92 - (step - 23) * 0.15))
-            try:
-                w.attributes("-alpha", a)
-            except Exception:
-                return
-            if step > 23 and a <= 0.0:
-                w.destroy()
-                toast_state["win"] = None
-                return
-            toast_state["job"] = root.after(100 if 5 <= step < 23 else 40, lambda: fade(step + 1))
-
-        fade(1)
-
-    def save_base_rgb():
-        status("Mentés…")
-
-        def work():
-            try:
-                q.put(("base_saved", "", eng.rgb.snapshot()))
-            except Exception as e:
-                q.put(("base_saved", f"Nem sikerült: {e.__class__.__name__}. Fut az OpenRGB szolgáltatás?", None))
-
-        threading.Thread(target=work, daemon=True).start()
-
-    def apply_hotkeys():
-        hk.set(eng.hotkey_map())
-
-    # ---- játék-overlay: a billentyűk csak nyitva tartás alatt vannak lefoglalva
-    overlay = OverlayController(eng, root, set_hotkeys=hk.set, foreground_mid=foreground_monitor_id, rect_for=monitor_rect,
-                                hotkey_failed=lambda: hk.failed, main_visible=lambda: root.state() != "withdrawn")
-
-    def overlay_tick():
-        try:
-            overlay.check()
-        except Exception as e:
-            eng.say(f"Overlay hiba: {e.__class__.__name__}")
-        root.after(500, overlay_tick)
-
-    # ---- tálca
-    state = {"icon": None}
-
-    def refresh_tray():
-        ic = state["icon"]
-        if ic is None:
-            return
-        try:
-            ic.icon = make_icon(bool(eng.active) or bool(eng.night_mons))
-            ic.update_menu()
-        except Exception:
-            pass
-
-    def tray_menu():
-        def toggler(mid, name):
-            return lambda icon, item: q.put(("toggle", mid, name))
-
-        def checker(mid, name):
-            return lambda item: eng.active.get(mid) == name
-
-        items = [pystray.MenuItem("Panel megnyitása", lambda icon, item: q.put(("panel",)), default=True),
-                 pystray.Menu.SEPARATOR]
-        for m in eng.mons():
-            items.append(pystray.MenuItem(m["name"], lambda icon, item: None, enabled=False))
-            for name, p in m["presets"].items():
-                items.append(pystray.MenuItem(name + (f"   ({p['hotkey']})" if p.get("hotkey") else ""),
-                                              toggler(m["id"], name), checked=checker(m["id"], name)))
-            items.append(pystray.MenuItem("Éjszakai mód", (lambda mid_: lambda icon, item: q.put(("night", mid_)))(m["id"]),
-                                          checked=(lambda mid_: lambda item: mid_ in eng.night_mons)(m["id"])))
-        items += [pystray.Menu.SEPARATOR,
-                  pystray.MenuItem("Éjszakai mód (minden monitor)", lambda icon, item: q.put(("night",)),
-                                   checked=lambda item: bool(eng.night_mons)),
-                  pystray.MenuItem("Semleges kép (minden kikapcsol)", lambda icon, item: q.put(("neutral",))),
-                  *([pystray.MenuItem("Gyorsbillentyűk (KDE)…", lambda icon, item: q.put(("shortcuts",)))] if SHORTCUT_HELP else []),
-                  pystray.Menu.SEPARATOR,
-                  pystray.MenuItem("Kilépés", lambda icon, item: q.put(("quit",)))]
-        return items
-
-    state["icon"] = pystray.Icon("kepprofil",make_icon(False), APP_NAME, pystray.Menu(tray_menu))
-    start_tray(state["icon"])
-
-    # ---- ablak megjelenítése / elrejtése
-    def show_panel():
-        overlay.close()                                   # a főablak és az overlay nem szerkeszthet egyszerre
-        eng.panel_open = True
-        root.deiconify()
-        root.lift()
-        root.focus_force()
-        sync_info()
-
-    def hide_panel():
-        eng.panel_open = False
-        eng.hold = False
-        root.withdraw()
-        eng.sync()                    # a mentetlen előnézet helyére a bekapcsolt állapot kerül
-
-    def request_close():
-        """Bezárás: ha vannak mentetlen módosítások, rákérdez (mentés / eldobás / maradás)."""
-        if is_dirty():
-            ans = messagebox.askyesnocancel(APP_NAME, "Mentetlen módosításaid vannak.\nMented őket a presetbe?\n\n"
-                                            "Igen: mentés és bezárás • Nem: eldobás és bezárás • Mégse: marad az ablak",
-                                            parent=root)
-            if ans is None:
-                return
-            if ans:
-                save_preset()
-            else:
-                load_preset(cur["name"])                      # a mentetlen állapot helyére a mentett kerül
-        hide_panel()
-
-    root.protocol("WM_DELETE_WINDOW", request_close)
-
-    def sync_info():
-        nv = "NVIDIA vibrance elérhető" if eng.display.vibrance_ok else "NVIDIA vibrance nem elérhető (nincs NVIDIA driver)"
-        failed = [a for a in hk.failed]
-        ui["info"].configure(text=f"{APP_NAME} {VERSION}. {nv}. Adatok: {DATA_DIR}" + (
-            f"\nFoglalt gyorsgomb(ok): {', '.join(failed)}" if failed else ""))
-        ui["auto"].select() if autostart_enabled() else ui["auto"].deselect()
-
-    def on_monitors():
-        """Monitor került a gépre / lekerült róla: a választó, a gyorsgombok és a tálcamenü is csak a csatlakoztatottakat mutatja."""
-        mons = eng.mons()
-        ui["mon"].configure(values=[m["name"] for m in mons])
-        here = next((m for m in mons if m["id"] == cur["mid"]), None)
-        if here:
-            ui["mon"].set(here["name"])                       # a values átírása a kijelölést elveszi
-        elif mons:
-            pick_monitor(mons[0]["name"])                     # az épp szerkesztett monitor lekerült: a mentetlen módosítás elvész
-        apply_hotkeys()
-        refresh_tray()
-        status(f"Monitorok: {', '.join(m['name'] for m in mons)}")
-
-    def pump():
+    def pump(self):
+        """A főszál üzenetsorának ürítése: minden üzenet `(fajta, *paraméterek)`; ismeretlen fajtát figyelmen kívül hagy."""
         try:
             while True:
-                m = q.get_nowait()
-                k = m[0]
-                if k == "panel":
-                    show_panel()
-                elif k == "shortcuts":
-                    shortcuts_dialog()
-                elif k == "toast":
-                    show_toast(m[1], m[2])
-                elif k == "toggle":
-                    eng.toggle_preset(m[1], m[2])
-                elif k == "night":
-                    eng.toggle_night(m[1] if len(m) > 1 else None)
-                elif k == "neutral":
-                    eng.neutral_all()
-                elif k == "hk":
-                    if m[1] == "overlay":
-                        overlay.toggle()
-                    elif m[1].startswith("ov|"):
-                        overlay.key(m[1])
-                    else:
-                        eng.run_action(m[1])
-                elif k == "monitors":
-                    on_monitors()
-                elif k == "refresh":
-                    refresh_tray()
-                    if root.state() != "withdrawn":
-                        sync_switches()
-                        if eng.log:
-                            status(f"{eng.log[-1][0]}  {eng.log[-1][1]}")
-                elif k == "base_saved":
-                    if not m[1]:
-                        spec = {"mode": "snapshot", "value": m[2]}
-                        ui["base"].set(spec)
-                        set_setting("base_rgb", spec)
-                        eng.rgb_applied = dict(spec)       # a mostani állapot az alap: nincs mit visszaállítani
-                    status(m[1] or f"Elmentve: a mostani RGB-állapot lett az alap ({len(m[2])} eszköz).")
-                elif k == "quit":
-                    quit_app()
+                kind, *arguments = self.queue.get_nowait()
+                if kind == "quit":
+                    self.quit()
                     return
+                handler = self._handlers.get(kind)
+                if handler:
+                    handler(*arguments)
         except queue.Empty:
             pass
-        root.after(100, pump)
+        self.root.after(PUMP_INTERVAL_MS, self.pump)
 
-    def quit_app():
-        overlay.close()
-        eng.shutdown()
+    def overlay_tick(self):
         try:
-            state["icon"].stop()
-        except Exception:
-            pass
-        root.destroy()
+            self.overlay.check()
+        except Exception as error:
+            self.eng.say(f"Overlay hiba: {error.__class__.__name__}")
+        self.root.after(OVERLAY_TICK_MS, self.overlay_tick)
 
-    # ---- indítás
-    ui["ns"][0].set(eng.set["night_strength"])
-    ui["ns"][0].configure(command=lambda v: (update_labels(), eng.set_night_strength(v), eng.save_settings()))
-    ui["nhk"].set(eng.set.get("night_hotkey", ""))
-    ui["nehk"].set(eng.set.get("neutral_hotkey", ""))
-    ui["chk"].set(eng.set.get("cycle_hotkey", ""))
-    ui["ovhk"].set(eng.set.get("overlay_hotkey", ""))
-    ui["base"].set(eng.set.get("base_rgb"))
-    ui["toast"].select() if eng.set.get("toast", True) else ui["toast"].deselect()
-    pick_monitor(eng.mons()[0]["name"] if eng.mons() else "")
-    poll_dirty()
-    eng.sync()                         # induláskor ismert (semleges) állapot
-    threading.Thread(target=eng.fx_loop, daemon=True).start()
+    def quit(self):
+        self.overlay.close()
+        self.eng.shutdown()
+        self.tray.stop()
+        self.root.destroy()
 
-    threading.Thread(target=lambda: eng.watch_loop(start_process_events), daemon=True).start()
+    # ---- az üzenetek kezelői
 
-    def wait_show():
-        while not eng.stop:
-            if show_signaled(show_ev, 1000, lambda a: q.put(("hk", a))):                              # a második indítás jelzett
-                q.put(("panel",))
+    def _show_shortcuts(self):
+        from gui_dialogs import show_shortcuts_dialog
+        show_shortcuts_dialog(self.root, self.eng, on_error=self.panel.set_status)
 
-    threading.Thread(target=wait_show, daemon=True).start()
-    apply_hotkeys()
-    pump()
-    overlay_tick()
-    HOOK.update(ui=ui, cur=cur, root=root, eng=eng, tabs=tabs, save=save_preset, is_dirty=is_dirty, on_slider=on_slider,
-                collect=collect, overlay=overlay, hk=hk, shortcuts=shortcuts_dialog, pick_preset=pick_preset,
-                show_toast=show_toast)       # csak az automatikus tesztek használják
-    if start_hidden:
-        root.withdraw()
-    else:
-        show_panel()
-    root.mainloop()
+    def _toggle_night(self, monitor_id=None):
+        self.eng.toggle_night(monitor_id)
+
+    def _run_hotkey_action(self, action):
+        if action == "overlay":
+            self.overlay.toggle()
+        elif action.startswith("ov|"):
+            self.overlay.key(action)
+        else:
+            self.eng.run_action(action)
+
+    def _on_engine_refresh(self):
+        self.tray.refresh()
+        self.panel.on_engine_refresh()
+
+
+def run_app(start_hidden):
+    from gui_tray import size_xorg_icon_window
+    size_xorg_icon_window()
+    already_running, show_event = single_instance()
+    if already_running:
+        signal_running(show_event)
+        return
+    ensure_launcher()
+    App(show_event).run(start_hidden)
