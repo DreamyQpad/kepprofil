@@ -1261,7 +1261,8 @@ def run_app(start_hidden):
     pump()
     overlay_tick()
     HOOK.update(ui=ui, cur=cur, root=root, eng=eng, tabs=tabs, save=save_preset, is_dirty=is_dirty, on_slider=on_slider,
-                collect=collect, overlay=overlay, hk=hk, shortcuts=shortcuts_dialog)       # csak az automatikus tesztek használják
+                collect=collect, overlay=overlay, hk=hk, shortcuts=shortcuts_dialog, pick_preset=pick_preset,
+                show_toast=show_toast)       # csak az automatikus tesztek használják
     if start_hidden:
         root.withdraw()
     else:
