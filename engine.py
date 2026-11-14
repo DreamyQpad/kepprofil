@@ -1,4 +1,5 @@
 """A motor: melyik monitoron melyik preset aktív, játékfigyelő, kijelző-visszaállítás, energiaprofil és RGB."""
+import sys
 import threading
 import time
 
@@ -35,6 +36,7 @@ class Engine:
         self.proc_counts = {}       # normalizált név -> futó példányok száma (esemény- és lekérdezéses módban is ez a forrás)
         self.running = set()        # a proc_counts pozitív kulcsai
         self.running_t = 0.0
+        self.events = None          # a folyamat-eseményforrás (van `stop()`-ja), vagy None
         self.event_mode = False     # igaz: a folyamat-eseményfigyelő él, a gyorsítótár nem avul el (nincs 6 mp-es újraolvasás)
         self.watch_wake = threading.Event()     # figyelt nevű folyamat indult/kilépett: a figyelő azonnal fusson
         self.run_lock = threading.Lock()
@@ -145,13 +147,19 @@ class Engine:
             else:
                 self.proc_counts.pop(n, None)
             self.running = set(self.proc_counts)
-        if n in self.watched_names():
+        names = self.watched_names(blocking=False)
+        if names is None or n in names:                         # ha a konfig épp zárolt, inkább felesleges ébresztés, mint várakozás
             self.watch_wake.set()
 
-    def watched_names(self):
-        """Az összes monitor összes presetjének normalizált folyamatneve (üres nélkül)."""
-        with self.lock:
+    def watched_names(self, blocking=True):
+        """Az összes monitor összes presetjének normalizált folyamatneve (üres nélkül). Nem blokkoló hívásnál None, ha a
+        `lock`-ot épp más tartja (hardver-szinkron közben): az eseményszál nem várakozhat rá."""
+        if not self.lock.acquire(blocking):
+            return None
+        try:
             return {norm_proc(p.get("process")) for m in self.cfg["monitors"] for p in m["presets"].values()} - {""}
+        finally:
+            self.lock.release()
 
     def proc_running(self, proc):
         if not proc:
@@ -397,8 +405,49 @@ class Engine:
             self.toggle_preset(mid, name)
 
     # -- játékfigyelő
+    POLL_SECONDS = 1.0 if sys.platform == "win32" else 2.0     # lekérdezéses módban ennyi másodpercenként fut a figyelő
+    RESYNC_SECONDS = 5.0                                       # eseménymódban ennyi másodpercenként olvassa újra a futó programokat
+    START_DELAYS = (1.5, 4.0)                                  # a játék indulása utáni ellenőrzések késleltetése: a játék ekkor nullázhatja a görbét
+
+    def watch_interval(self):
+        return self.RESYNC_SECONDS if self.event_mode else self.POLL_SECONDS
+
+    def watch_loop(self, start_events=None):
+        """A figyelő-szál törzse. A `start_events(on_event, on_lost)` eseményforrást ad (van `stop()`-ja) vagy None-t;
+        az indítás is ebben a szálban fut, hogy ne tartsa fel a felületet."""
+        if start_events:
+            self.events = start_events(self.proc_event, self._events_lost)
+            if self.events:
+                self.refresh_running()                         # induló pillanatkép, ehhez adnak hozzá az események
+                self.event_mode = True
+                self.say("Játékfigyelő: események")
+            else:
+                self.say("Játékfigyelő: lekérdezés (nincs emelt jog vagy az eseményforrás nem elérhető)")
+        while not self.stop:
+            try:
+                self.watch_tick()
+            except Exception as e:
+                self.say(f"Figyelő hiba: {e}")
+            self.watch_wake.wait(self.watch_interval())
+            self.watch_wake.clear()
+
+    def _events_lost(self):
+        """Az eseményfolyam megszakadt: vissza a lekérdezésre, a következő tick újraolvassa a futó programokat."""
+        self.event_mode = False
+        self.running_t = 0.0
+        self.watch_wake.set()
+        self.say("Játékfigyelő: az eseményfolyam megszakadt, lekérdezés")
+
+    def after_game_start(self):
+        """A játék a képernyőmódja felvételekor gyakran nullázza a görbét: késleltetve újra ellenőrzünk."""
+        for d in self.START_DELAYS:
+            t = threading.Timer(d, self.reapply, args=("start",))
+            t.daemon = True
+            t.start()
+
     def watch_tick(self):
-        self.refresh_running()
+        if not self.event_mode or time.time() - self.running_t > self.RESYNC_SECONDS:
+            self.refresh_running()
         if time.time() - self.monitors_t > self.MONITOR_POLL:
             self.refresh_monitors()
         for mon in self.mons():
@@ -411,7 +460,6 @@ class Engine:
                         if p.get("process") and self.proc_running(p["process"]) and (mid, n) not in self.manual_off), None)
             cur = self.active.get(mid)
             if hit and cur != hit[0]:
-                time.sleep(3)                                  # a játék vegye fel a képernyőmódját
                 with self.lock:
                     if not (cur and (mid, cur) in self.auto):      # másik játék átvételekor a korábbi alap marad
                         if cur:
@@ -424,6 +472,7 @@ class Engine:
                     ok = self.sync(mid)
                 self.toast(self.label(mid, hit[0]), mid)
                 self.say(f"{mon['name']}: '{hit[0]}' bekapcsolt (játék elindult){'' if ok else ' – nem sikerült'}")
+                self.after_game_start()
             elif cur and (mid, cur) in self.auto:
                 p = self.preset(mid, cur)
                 if not (p and p.get("process") and self.proc_running(p["process"])):
@@ -456,7 +505,8 @@ class Engine:
     # -- rendszeresemények: ébredés, kijelzőváltás, feloldás (hw.SystemEvents hívja)
     MONITOR_POLL = 6.0                                         # ennyi másodpercenként ellenőrzi a figyelő a csatlakoztatott monitorokat
     EVENT_DELAYS = {"resume": (2.0, 6.0, 15.0), "display": (1.0, 4.0), "unlock": (1.5, 5.0)}
-    EVENT_TEXT = {"resume": "ébredés után", "display": "kijelzőváltás után", "unlock": "a munkamenet feloldása után"}
+    EVENT_TEXT = {"resume": "ébredés után", "display": "kijelzőváltás után", "unlock": "a munkamenet feloldása után",
+                  "start": "a játék indulása után"}
 
     def system_event(self, kind):
         """A driver ilyenkor gyakran nullázza a gamma-görbét vagy a vibrance-t, de a monitor még nem biztos, hogy kész:
@@ -533,6 +583,12 @@ class Engine:
 
     def shutdown(self):
         self.stop = True
+        self.watch_wake.set()
+        if self.events:
+            try:
+                self.events.stop()
+            except Exception:
+                pass
         with self.lock:
             self.active.clear()
             self.night_mons.clear()

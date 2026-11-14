@@ -1248,15 +1248,7 @@ def run_app(start_hidden):
     eng.sync()                         # induláskor ismert (semleges) állapot
     threading.Thread(target=eng.fx_loop, daemon=True).start()
 
-    def watch():
-        while not eng.stop:
-            try:
-                eng.watch_tick()
-            except Exception as e:
-                eng.say(f"Figyelő hiba: {e}")
-            time.sleep(2)
-
-    threading.Thread(target=watch, daemon=True).start()
+    threading.Thread(target=lambda: eng.watch_loop(None), daemon=True).start()
 
     def wait_show():
         while not eng.stop:

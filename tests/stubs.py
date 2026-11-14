@@ -47,6 +47,7 @@ def make_engine(test, cfg=None, settings=None, active=("MON1", "Játék"), plugg
     mock.patch.object(engine_mod.Engine, "refresh_running", lambda self: None).start()
     test.addCleanup(mock.patch.stopall)
     eng = engine_mod.Engine()
+    eng.START_DELAYS = ()                                       # a tesztek ne indítsanak időzítőt (a Timer-tesztek felülírják)
     eng.saves = {"config": 0, "settings": 0}
     eng.save_config = lambda: eng.saves.__setitem__("config", eng.saves["config"] + 1)
     eng.save_settings = lambda: eng.saves.__setitem__("settings", eng.saves["settings"] + 1)
