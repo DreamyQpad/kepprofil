@@ -55,6 +55,8 @@ Egyetlen kódbázis, a platformfüggő részek külön modulban (`hw_windows.py`
 | `engine.py` | motor: aktív presetek, játékfigyelő, visszaállítás, mellékhatások |
 | `overlay.py` | játék-overlay: modell (értékek, mentés), nem aktiválódó megjelenítő, vezérlő (nyitás, billentyűk) |
 | `gui.py` | felület (CustomTkinter), tálcaikon, értesítés |
+| `gui_widgets.py` | önálló felületi elemek: gyorsgomb-mező, RGB-választó, csúszka-sor |
+| `preset_ops.py` | preset- és változatműveletek (névellenőrzés, átnevezés, törlés, másolat, export/import), felület nélkül tesztelhetően |
 | `build.ps1`, `build_linux.py`, `linux/` | Windowsos telepítő építése; Linux-csomag építése és a benne lévő `install.sh` / `uninstall.sh` |
 
 ## Futtatás forrásból
@@ -99,7 +101,7 @@ Telepítés Linuxon: [LINUX.md](LINUX.md).
 - Hibák jelzése a tálcaikonon (pl. nem elérhető NVAPI / OpenRGB), nem csak a naplóban.
 - Időzített éjszakai mód (napnyugta vagy fix időpont).
 - Színhőmérséklet-csúszka (Kelvin) az R/G/B erősítés mellé.
-- A `gui.py` további bontása (a `run_app` még egyetlen nagy függvény).
+- A `gui.py` további bontása: a `run_app` még egy nagy függvény (a vezérlők és a preset-műveletek már kiemeltek); hátra van a toast és a tálcamenü külön modulba, és a rövid helyi változónevek (`p`, `g`, `r`, `vr`…) beszédesebbre cserélése.
 
 **Linux** (részletesen: [LINUX.md](LINUX.md))
 - Globális gyorsgomb: futó példány parancsot fogad, a KDE gyorsbillentyűkhöz kötve.

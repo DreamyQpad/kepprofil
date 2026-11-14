@@ -1,7 +1,6 @@
 """Füstpróba a valódi `gui.run_app`-ra: a felület felépül, és a preset-/változat-/import-export műveletek, a toast és a
 tálcamenü a stubolt motoron (hardver és tálcaikon nélkül) a várt eredményt adják. Nincs Tk-képernyő: a tesztet kihagyja."""
 import json
-import os
 import sys
 import tempfile
 import threading
