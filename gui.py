@@ -17,7 +17,8 @@ from hw import (Hotkeys, SystemEvents, find_dev, foreground_monitor_id, monitor_
 from hw_common import build_action
 from overlay import OverlayController
 from system import (SHORTCUT_HELP, action_command, autostart_enabled, ensure_launcher, kill_old_watcher, open_native,
-                    open_shortcut_settings, set_autostart, signal_running, single_instance, visible_programs, show_signaled)
+                    open_shortcut_settings, set_autostart, signal_running, single_instance, visible_programs, show_signaled,
+                    start_process_events)
 
 HOOK = {}                                         # tesztek: a futó felület elemei (run_app tölti fel)
 TRAY_ICON_PX = 32                                 # Linux, xorg-backend (tartalék): a tálcaikon-ablak kezdőmérete
@@ -1248,7 +1249,7 @@ def run_app(start_hidden):
     eng.sync()                         # induláskor ismert (semleges) állapot
     threading.Thread(target=eng.fx_loop, daemon=True).start()
 
-    threading.Thread(target=lambda: eng.watch_loop(None), daemon=True).start()
+    threading.Thread(target=lambda: eng.watch_loop(start_process_events), daemon=True).start()
 
     def wait_show():
         while not eng.stop:

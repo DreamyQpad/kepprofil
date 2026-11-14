@@ -125,3 +125,12 @@ def send_action(action):
 def open_native(p):
     """Fájl/mappa megnyitása az alapértelmezett programmal."""
     os.startfile(str(p))
+
+
+def start_process_events(on_event, on_lost):
+    """Folyamat-eseményforrás indítása; `None`, ha nem elérhető (a figyelő ilyenkor lekérdez). Az import itt van, hogy a modul betöltése ne függjön tőle."""
+    try:
+        from proc_events_windows import start_process_events as start
+        return start(on_event, on_lost)
+    except Exception:
+        return None

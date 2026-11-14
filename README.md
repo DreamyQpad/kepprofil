@@ -13,7 +13,7 @@ tesztelve, működik – lásd [LINUX.md](LINUX.md).
 
 - **Presetek monitoronként**: gamma (0,30–2,80 az NVIDIA-skálán), kontraszt, fényerő, vibrance, R/G/B erősítés (Színek fül).
 - **Változatok**: egy presetnek több csúszkaállása lehet (pl. pályánként), külön gyorsgombbal vagy egy globális léptető gombbal (a következő változatra lép).
-- **Játékfigyelő**: a preset „process" mezője alapján automatikusan be-/kikapcsol; kézi felülbírálás játék közben is.
+- **Játékfigyelő**: a preset „process" mezője alapján automatikusan be-/kikapcsol; kézi felülbírálás játék közben is. Emelt jogú futásnál (Windows) a játék indulását/kilépését eseményből ismeri fel, nem emelt jognál 1 mp-es lekérdezéssel; a napló jelzi, melyik mód aktív.
 - **Tálcamenü és globális gyorsgombok**: presetek, éjszakai mód, semleges kép.
 - **Játék-overlay** (Program fül → „Gyorsgomb: játék-overlay"): egy gombbal a játék fölé kerül az aktuális játék profilja
   (fényerő, kontraszt, gamma, vibrance, R/G/B), és a játék elvesztése nélkül, billentyűzettel szerkeszthető: ↑↓ sor,
@@ -96,7 +96,6 @@ Telepítés Linuxon: [LINUX.md](LINUX.md).
 
 **Windows**
 - Frissítés-ellenőrzés a programból (verzió megjelenítése már van; telepítő-mappából vagy GitHub Releases-ből).
-- Gyorsabb játékfelismerés folyamatindítás-eseményekkel (most 2 mp-es lekérdezés).
 - Hibák jelzése a tálcaikonon (pl. nem elérhető NVAPI / OpenRGB), nem csak a naplóban.
 - Időzített éjszakai mód (napnyugta vagy fix időpont).
 - Színhőmérséklet-csúszka (Kelvin) az R/G/B erősítés mellé.

@@ -174,3 +174,8 @@ def open_shortcut_settings():
 def open_native(p):
     """Fájl/mappa megnyitása az alapértelmezett programmal."""
     subprocess.Popen(["xdg-open", str(p)])
+
+
+def start_process_events(on_event, on_lost):
+    """Linuxon nincs eseményforrás: mindig `None`, a játékfigyelő lekérdez."""
+    return None
