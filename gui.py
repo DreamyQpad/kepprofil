@@ -8,12 +8,12 @@ import time
 import traceback
 from pathlib import Path
 
-from config import (BACKUP_DIR, write_log, SETTINGS_KEYS, _read_json, _write_json, auto_backup, mirror_first, new_preset,
-                    normalize_config, pgain, pvals, valid_config)
+from config import BACKUP_DIR, write_log, _read_json, auto_backup, mirror_first, pgain, pvals
 from consts import APP_NAME, DATA_DIR, LOG_FILE, NEUTRAL, RES_DIR, VERSION
 from engine import Engine
 from hw import (Hotkeys, SystemEvents, find_dev, foreground_monitor_id, monitor_rect, overlay_style, power_plans)
 from hw_common import build_action
+import preset_ops
 from overlay import OverlayController
 from system import (SHORTCUT_HELP, action_command, autostart_enabled, ensure_launcher, kill_old_watcher, open_native,
                     open_shortcut_settings, set_autostart, signal_running, single_instance, visible_programs, show_signaled,
@@ -461,77 +461,57 @@ def run_app(start_hidden):
         mark_clean()
 
     def ask_variant_name(text, title):
-        n = ctk.CTkInputDialog(text=text, title=title).get_input()
-        if not n or not n.strip():
-            return None
-        n = n.strip()
-        if "|" in n:
-            status("A névben nem lehet | jel.")
-            return None
-        if n in ((eng.preset(cur["mid"], cur["name"]) or {}).get("variants") or {}):
-            status("Ilyen nevű változat már van.")
-            return None
-        return n
+        raw_name = ctk.CTkInputDialog(text=text, title=title).get_input()
+        existing = (eng.preset(cur["mid"], cur["name"]) or {}).get("variants") or {}
+        name, error = preset_ops.clean_name(raw_name, existing, "változat")
+        if error:
+            status(error)
+        return name
 
     def new_variant_dialog():
         mid, name = cur["mid"], cur["name"]
-        p = eng.preset(mid, name)
-        n = ask_variant_name("Az új változat neve (pl. a pálya):", "Új változat")
-        if not p or not n:
+        preset = eng.preset(mid, name)
+        variant_name = ask_variant_name("Az új változat neve (pl. a pálya):", "Új változat")
+        if not preset or not variant_name:
             return
-        g, c, b, v = vals_now()
-        if not p.get("variants"):
-            if n == "Alap":
-                status("Ilyen nevű változat már van (az eddigi értékek 'Alap' néven az első változat lesznek).")
-                return
-            # az eddig mentett értékek lesznek az első változat; az új a mostani csúszkaállásból indul
-            p["variants"] = {"Alap": {"gamma": p["gamma"], "contrast": p["contrast"], "brightness": p["brightness"],
-                                      "vibrance": p.get("vibrance", 50), "gain": pgain(p)}}
-        p["variants"][n] = {"gamma": g, "contrast": c, "brightness": b, "vibrance": v, "gain": gains_now()}
-        eng.save_config()
-        cur["variant"] = n
-        eng.variant[(mid, name)] = n
-        refresh_variant_ui(p)
+        # az új változat a mostani csúszkaállásból indul
+        error = preset_ops.add_variant(eng, mid, name, variant_name, preset_ops.values_dict(*vals_now(), gains_now()))
+        if error:
+            status(error)
+            return
+        cur["variant"] = variant_name
+        refresh_variant_ui(preset)
         ui["vhk"].set("")
         mark_clean()
-        status(f"Új változat: {n} (az értékei a mostani csúszkaállásból indultak)")
+        status(f"Új változat: {variant_name} (az értékei a mostani csúszkaállásból indultak)")
 
     def rename_variant_dialog():
-        mid, name, old = cur["mid"], cur["name"], cur["variant"]
-        p = eng.preset(mid, name)
-        if not p or not old:
+        mid, name, old_name = cur["mid"], cur["name"], cur["variant"]
+        preset = eng.preset(mid, name)
+        if not preset or not old_name:
             return
-        n = ask_variant_name(f"A(z) '{old}' változat új neve:", "Változat átnevezése")
-        if not n:
+        new_name = ask_variant_name(f"A(z) '{old_name}' változat új neve:", "Változat átnevezése")
+        if not new_name:
             return
-        with eng.lock:
-            p["variants"] = {(n if k == old else k): v for k, v in p["variants"].items()}       # a sorrend megmarad
-            if eng.variant.get((mid, name)) == old:
-                eng.variant[(mid, name)] = n
-        cur["variant"] = n
-        eng.save_config()
+        preset_ops.rename_variant(eng, mid, name, old_name, new_name)
+        cur["variant"] = new_name
         apply_hotkeys()                               # a gyorsgomb-azonosító tartalmazza a változat nevét
-        refresh_variant_ui(p)
+        refresh_variant_ui(preset)
         mark_clean()
-        status(f"Átnevezve: {old} → {n}")
+        status(f"Átnevezve: {old_name} → {new_name}")
 
     def delete_variant():
-        mid, name, old = cur["mid"], cur["name"], cur["variant"]
-        p = eng.preset(mid, name)
-        if not p or len(p.get("variants") or {}) < 2 or not messagebox.askyesno(
-                APP_NAME, f"Törlöd a(z) '{old}' változatot?", parent=root):
+        mid, name, variant_name = cur["mid"], cur["name"], cur["variant"]
+        preset = eng.preset(mid, name)
+        if not preset or len(preset.get("variants") or {}) < 2 or not messagebox.askyesno(
+                APP_NAME, f"Törlöd a(z) '{variant_name}' változatot?", parent=root):
             return
-        with eng.lock:
-            del p["variants"][old]
-            eng.variant.pop((mid, name), None)
-            mirror_first(p)
-        eng.save_config()
+        cur["variant"] = preset_ops.delete_variant(eng, mid, name, variant_name)
         apply_hotkeys()
-        cur["variant"] = next(iter(p["variants"]))
-        refresh_variant_ui(p)
+        refresh_variant_ui(preset)
         pick_variant(cur["variant"], ask=False)
         eng.sync(mid)
-        status(f"Törölve: {old}")
+        status(f"Törölve: {variant_name}")
 
     def collect():
         p = json.loads(json.dumps(eng.preset(cur["mid"], cur["name"]) or {}))        # mély másolat: a mentésig az eredeti nem változik
@@ -580,17 +560,11 @@ def run_app(start_hidden):
 
     def ask_name(text, title):
         """Új preset-nevet kér; None, ha mégse, üres vagy már foglalt."""
-        n = ctk.CTkInputDialog(text=text, title=title).get_input()
-        if not n or not n.strip():
-            return None
-        n = n.strip()
-        if "|" in n:
-            status("A névben nem lehet | jel.")
-            return None
-        if n in eng.mon(cur["mid"])["presets"]:
-            status("Ilyen nevű preset már van.")
-            return None
-        return n
+        raw_name = ctk.CTkInputDialog(text=text, title=title).get_input()
+        name, error = preset_ops.clean_name(raw_name, eng.mon(cur["mid"])["presets"], "preset")
+        if error:
+            status(error)
+        return name
 
     def add_preset(n, p, msg):
         eng.mon(cur["mid"])["presets"][n] = p
@@ -601,96 +575,63 @@ def run_app(start_hidden):
         refresh_tray()
 
     def new_preset_dialog():
-        n = ask_name("Az új preset neve:", "Új preset")
-        if not n:
+        name = ask_name("Az új preset neve:", "Új preset")
+        if not name:
             return
-        g, c, b, v = vals_now()
-        p = new_preset((g, c, b, v), re.sub(r"(?i)\.exe$", "", ui["proc"].get().strip()))
-        p["gain"] = gains_now()
-        p["default"] = {"gamma": g, "contrast": c, "brightness": b, "vibrance": v, "gain": gains_now()}
-        add_preset(n, p, f"Létrehozva: {n}")
+        process = re.sub(r"(?i)\.exe$", "", ui["proc"].get().strip())
+        add_preset(name, preset_ops.blank_preset((*vals_now(), gains_now()), process), f"Létrehozva: {name}")
 
     def copy_preset_dialog():
-        src = cur["name"]
-        n = ask_name(f"A(z) '{src}' másolatának neve:", "Preset másolása")
-        if not n:
+        source_name = cur["name"]
+        name = ask_name(f"A(z) '{source_name}' másolatának neve:", "Preset másolása")
+        if not name:
             return
-        p = json.loads(json.dumps(collect()))         # mély másolat: a mostani csúszkaállással, energia/RGB profillal
-        p.pop("hotkey", None)                         # gyorsgomb és játék-exe nem másolódik: ütköznének az eredetivel
-        p["process"] = ""
-        for v_ in (p.get("variants") or {}).values():
-            v_.pop("hotkey", None)
-        g, c, b, v = vals_now()
-        p["default"] = {"gamma": g, "contrast": c, "brightness": b, "vibrance": v, "gain": gains_now()}
-        add_preset(n, p, f"Másolva: {src} → {n} (gyorsgomb és játék nélkül)")
+        copy = preset_ops.copy_of_preset(collect(), (*vals_now(), gains_now()))      # a mostani csúszkaállással, energia/RGB profillal
+        add_preset(name, copy, f"Másolva: {source_name} → {name} (gyorsgomb és játék nélkül)")
 
     def rename_preset_dialog():
-        mid, old = cur["mid"], cur["name"]
-        if old == "Alap":
+        mid, old_name = cur["mid"], cur["name"]
+        if old_name == "Alap":
             return
-        n = ask_name(f"A(z) '{old}' új neve:", "Preset átnevezése")
-        if not n:
+        new_name = ask_name(f"A(z) '{old_name}' új neve:", "Preset átnevezése")
+        if not new_name:
             return
-        with eng.lock:
-            mon = eng.mon(mid)
-            mon["presets"] = {(n if k == old else k): v for k, v in mon["presets"].items()}    # a sorrend megmarad
-            if eng.active.get(mid) == old:
-                eng.active[mid] = n
-            for s in (eng.auto, eng.manual_off):
-                if (mid, old) in s:
-                    s.discard((mid, old))
-                    s.add((mid, n))
-            if (mid, old) in eng.variant:
-                eng.variant[(mid, n)] = eng.variant.pop((mid, old))
-        cur["name"] = n
-        eng.save_config()
+        preset_ops.rename_preset(eng, mid, old_name, new_name)
+        cur["name"] = new_name
         apply_hotkeys()                               # a gyorsgomb-azonosító tartalmazza a preset nevét
         ui["preset"].configure(values=list(eng.mon(mid)["presets"]))
-        ui["preset"].set(n)
+        ui["preset"].set(new_name)
         refresh_tray()
-        status(f"Átnevezve: {old} → {n}")
+        status(f"Átnevezve: {old_name} → {new_name}")
 
     def export_all():
-        f = filedialog.asksaveasfilename(title="Presetek exportálása", defaultextension=".json",
-                                         initialfile=f"kepprofil-mentes-{time.strftime('%Y-%m-%d')}.json",
-                                         filetypes=[("Képprofil mentés", "*.json")])
-        if not f:
+        file_name = filedialog.asksaveasfilename(title="Presetek exportálása", defaultextension=".json",
+                                                 initialfile=f"kepprofil-mentes-{time.strftime('%Y-%m-%d')}.json",
+                                                 filetypes=[("Képprofil mentés", "*.json")])
+        if not file_name:
             return
-        data = {"kepprofil_backup": 1, "exported": time.strftime("%Y-%m-%d %H:%M:%S"), "config": eng.cfg,
-                "settings": {k: eng.set.get(k) for k in SETTINGS_KEYS}}
         try:
-            Path(f).write_text(json.dumps(data, ensure_ascii=False, indent=4), encoding="utf-8")
-            status(f"Exportálva: {f}")
+            Path(file_name).write_text(json.dumps(preset_ops.export_data(eng), ensure_ascii=False, indent=4),
+                                       encoding="utf-8")
+            status(f"Exportálva: {file_name}")
         except OSError as e:
             status(f"Nem sikerült exportálni: {e.__class__.__name__}")
 
     def import_all():
-        f = filedialog.askopenfilename(title="Presetek importálása", filetypes=[("Képprofil mentés", "*.json")])
-        if not f:
+        file_name = filedialog.askopenfilename(title="Presetek importálása", filetypes=[("Képprofil mentés", "*.json")])
+        if not file_name:
             return
-        data = _read_json(Path(f), None)
-        cfg = data.get("config") if isinstance(data, dict) and "config" in data else data
-        if not valid_config(cfg):
+        data = _read_json(Path(file_name), None)
+        config = preset_ops.importable_config(data)
+        if config is None:
             status("Ez a fájl nem Képprofil-mentés (vagy sérült), nem importáltam.")
             return
         if not messagebox.askyesno(APP_NAME, "Az importálás felülírja az összes mostani presetet, gyorsgombot és az "
                                    "éjszakai mód beállításait.\nA mostani állapotról előbb biztonsági mentés készül "
                                    "(backup mappa). Folytatod?", parent=root):
             return
-        _write_json(BACKUP_DIR / f"presets-{time.strftime('%Y-%m-%d_%H%M%S')}-import-elott.json", eng.cfg)
-        saved = data.get("settings") if isinstance(data, dict) else None
-        with eng.lock:
-            eng.active.clear()
-            eng.auto.clear()
-            eng.manual_off.clear()
-            eng.cfg = normalize_config(cfg)
-            if isinstance(saved, dict):
-                for k in SETTINGS_KEYS:
-                    if saved.get(k) is not None:
-                        eng.set[k] = saved[k]
-            eng.migrate_cycle_hotkey()
-            eng.save_config()
-            eng.save_settings()
+        preset_ops.import_config(eng, data, config,
+                                 BACKUP_DIR / f"presets-{time.strftime('%Y-%m-%d_%H%M%S')}-import-elott.json")
         ui["mon"].configure(values=[m["name"] for m in eng.mons()])
         ui["ns"][0].set(eng.set["night_strength"])
         eng.set_night_strength(eng.set["night_strength"])
@@ -710,9 +651,7 @@ def run_app(start_hidden):
         mid, name = cur["mid"], cur["name"]
         if name == "Alap" or not messagebox.askyesno(APP_NAME, f"Törlöd a(z) '{name}' presetet?", parent=root):
             return
-        eng.set_active(mid, name, False)
-        del eng.mon(mid)["presets"][name]
-        eng.save_config()
+        preset_ops.delete_preset(eng, mid, name)
         apply_hotkeys()
         pick_monitor(eng.mon(mid)["name"])
         status(f"Törölve: {name}")
