@@ -18,7 +18,7 @@ class Loading(unittest.TestCase):
     def test_rows_order_and_ranges(self):
         self.assertEqual([r.key for r in ROWS], ["b", "c", "g", "v", "cr", "cg", "cb"])
         g = ROWS[row_index("g")]
-        self.assertEqual((g.lo, g.hi, g.step, g.default), (0.30, 2.80, 0.01, 1.0))
+        self.assertEqual((g.minimum, g.maximum, g.step, g.default), (0.30, 2.80, 0.01, 1.0))
 
     def test_loads_values_with_gamma_display_scale(self):
         m, _, _ = model_for(self)

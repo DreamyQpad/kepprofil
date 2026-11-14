@@ -21,10 +21,10 @@ def visible_programs():
 
     def cb(hwnd, _):
         if user32.IsWindowVisible(hwnd):
-            n = user32.GetWindowTextLengthW(hwnd)
-            if n:
-                buf = ctypes.create_unicode_buffer(n + 1)
-                user32.GetWindowTextW(hwnd, buf, n + 1)
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
                 pid = wt.DWORD()
                 user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
                 try:
@@ -37,7 +37,7 @@ def visible_programs():
         return True
 
     user32.EnumWindows(proto(cb), 0)
-    return dict(sorted(res.items(), key=lambda kv: kv[0].lower()))
+    return dict(sorted(res.items(), key=lambda item: item[0].lower()))
 
 
 def kill_old_watcher():
@@ -48,10 +48,10 @@ def kill_old_watcher():
         return
     try:
         import psutil
-        for p in psutil.process_iter(["name", "cmdline"]):
-            cmd = " ".join(p.info.get("cmdline") or [])
+        for process in psutil.process_iter(["name", "cmdline"]):
+            cmd = " ".join(process.info.get("cmdline") or [])
             if "GameWatcher.ps1" in cmd:
-                p.kill()
+                process.kill()
     except Exception:
         pass
     try:
@@ -68,9 +68,9 @@ def autostart_enabled():
     return autostart_link().exists()
 
 
-def set_autostart(on):
+def set_autostart(enabled):
     lnk = autostart_link()
-    if not on:
+    if not enabled:
         try:
             lnk.unlink()
         except OSError:
@@ -78,28 +78,28 @@ def set_autostart(on):
         return
     target = sys.executable if FROZEN else str(Path(sys.executable).with_name("pythonw.exe"))
     args = "--tray" if FROZEN else f'"{HERE / "kijelzo.py"}" --tray'
-    ps = ("$s=(New-Object -ComObject WScript.Shell).CreateShortcut('%s');$s.TargetPath='%s';$s.Arguments='%s';"
+    script = ("$s=(New-Object -ComObject WScript.Shell).CreateShortcut('%s');$s.TargetPath='%s';$s.Arguments='%s';"
           "$s.WorkingDirectory='%s';$s.Save()" % (lnk, target, args.replace("'", "''"), HERE))
     STARTUP_DIR.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, creationflags=CREATE_NO_WINDOW)
+    subprocess.run(["powershell", "-NoProfile", "-Command", script], capture_output=True, creationflags=CREATE_NO_WINDOW)
 
 
 def single_instance():
     """-> (már_fut, jelző-esemény). A második indítás a már futó példányban megnyitja a panelt."""
     kernel32.CreateMutexW(None, False, "Local\\KepprofilProgram")
     already = ctypes.get_last_error() == 183
-    ev = kernel32.CreateEventW(None, False, False, "Local\\KepprofilPanelMutat")
-    return already, ev
+    event = kernel32.CreateEventW(None, False, False, "Local\\KepprofilPanelMutat")
+    return already, event
 
 
-def signal_running(ev):
+def signal_running(event):
     """A már futó példánynak jelzés: mutassa a panelt."""
-    kernel32.SetEvent(ev)
+    kernel32.SetEvent(event)
 
 
-def show_signaled(ev, ms, on_action=None):
+def show_signaled(event, timeout_ms, on_action=None):
     """Igaz, ha a második indítás jelzett a várakozás alatt (az on_action Windowson nem használt: ott natív gyorsgomb van)."""
-    return kernel32.WaitForSingleObject(ev, ms) == 0
+    return kernel32.WaitForSingleObject(event, timeout_ms) == 0
 
 
 def ensure_launcher():
@@ -122,9 +122,9 @@ def send_action(action):
     return False
 
 
-def open_native(p):
+def open_native(path):
     """Fájl/mappa megnyitása az alapértelmezett programmal."""
-    os.startfile(str(p))
+    os.startfile(str(path))
 
 
 def start_process_events(on_event, on_lost):

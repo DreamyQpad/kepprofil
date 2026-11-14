@@ -79,9 +79,9 @@ class Toast:
         width, height = window.winfo_reqwidth(), window.winfo_reqheight()
         left, top, right, bottom = (self.rect_for(monitor_id)
                                     or (0, 0, window.winfo_screenwidth(), window.winfo_screenheight()))
-        x = left + (right - left - width) // 2
-        y = top + int((bottom - top) * TOP_MARGIN_RATIO)
-        window.geometry(f"{width}x{height}+{x}+{y}")
+        window_x = left + (right - left - width) // 2
+        window_y = top + int((bottom - top) * TOP_MARGIN_RATIO)
+        window.geometry(f"{width}x{height}+{window_x}+{window_y}")
 
     def _fade(self, window, step):
         if self.window is not window:                         # közben újabb toast jött

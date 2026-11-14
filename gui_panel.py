@@ -29,8 +29,8 @@ PREVIEW_DELAY_MS = 40              # a csúszka mozgatása után ennyivel megy k
 DIRTY_POLL_MS = 400
 
 
-def set_switch(switch, on):
-    switch.select() if on else switch.deselect()
+def set_switch(switch, enabled):
+    switch.select() if enabled else switch.deselect()
 
 
 def without_exe_suffix(text):

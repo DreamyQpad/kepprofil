@@ -29,14 +29,14 @@ def visible_programs():
             "python3", "xdg-desktop-por", "xdg-document-po", "xdg-permission-", "Xwayland", "kepprofil", "gamma-panel"}
     res = {}
     uid = os.getuid()
-    for p in psutil.process_iter(["name", "uids", "exe"]):
+    for process in psutil.process_iter(["name", "uids", "exe"]):
         try:
-            if p.info["uids"] and p.info["uids"].real == uid and p.info["name"] and p.info["name"] not in skip:
-                name = p.info["name"][:-4] if p.info["name"].lower().endswith(".exe") else p.info["name"]
-                res.setdefault(name, p.info.get("exe") or "")
+            if process.info["uids"] and process.info["uids"].real == uid and process.info["name"] and process.info["name"] not in skip:
+                name = process.info["name"][:-4] if process.info["name"].lower().endswith(".exe") else process.info["name"]
+                res.setdefault(name, process.info.get("exe") or "")
         except psutil.Error:
             continue
-    return dict(sorted(res.items(), key=lambda kv: kv[0].lower()))
+    return dict(sorted(res.items(), key=lambda item: item[0].lower()))
 
 
 def kill_old_watcher():
@@ -64,10 +64,10 @@ def ensure_launcher():
             ico = RES_DIR / "assets" / "icon.ico"
             if ico.is_file():
                 LAUNCHER_ICON.parent.mkdir(parents=True, exist_ok=True)
-                with Image.open(ico) as im:
-                    if (256, 256) in im.ico.sizes():
-                        im.size = (256, 256)
-                    im.convert("RGBA").save(LAUNCHER_ICON)
+                with Image.open(ico) as image:
+                    if (256, 256) in image.ico.sizes():
+                        image.size = (256, 256)
+                    image.convert("RGBA").save(LAUNCHER_ICON)
         if not LAUNCHER_FILE.exists() or LAUNCHER_FILE.read_text(encoding="utf-8") != text:
             LAUNCHER_FILE.parent.mkdir(parents=True, exist_ok=True)
             LAUNCHER_FILE.write_text(text, encoding="utf-8")
@@ -83,25 +83,25 @@ def autostart_enabled():
     return _autostart_file().exists()
 
 
-def set_autostart(on):
-    f = _autostart_file()
-    if not on:
-        f.unlink(missing_ok=True)
+def set_autostart(enabled):
+    autostart_file = _autostart_file()
+    if not enabled:
+        autostart_file.unlink(missing_ok=True)
         return
     cmd = f"{_exec_base()} --tray"
     AUTOSTART_DIR.mkdir(parents=True, exist_ok=True)
-    f.write_text(f"[Desktop Entry]\nType=Application\nName={APP_NAME}\nExec={cmd}\nX-KDE-autostart-after=panel\n", encoding="utf-8")
+    autostart_file.write_text(f"[Desktop Entry]\nType=Application\nName={APP_NAME}\nExec={cmd}\nX-KDE-autostart-after=panel\n", encoding="utf-8")
 
 
 def single_instance():
     """-> (már_fut, jelző-kezelő). Az első példány egy Unix-socketen hallgat; a második ide küld "show"-t."""
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        s.connect(str(SOCKET_PATH))
-        s.close()
+        server.connect(str(SOCKET_PATH))
+        server.close()
         return True, None
     except OSError:
-        s.close()
+        server.close()
     SOCKET_PATH.unlink(missing_ok=True)                    # elárvult socket-fájl
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(str(SOCKET_PATH))
@@ -111,33 +111,33 @@ def single_instance():
 
 def signal_running(_ev=None):
     """A már futó példánynak jelzés: mutassa a panelt."""
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        s.connect(str(SOCKET_PATH))
-        s.sendall(b"show\n")
+        client.connect(str(SOCKET_PATH))
+        client.sendall(b"show\n")
     except OSError:
         pass
     finally:
-        s.close()
+        client.close()
 
 
 def send_action(action):
     """Akció küldése a futó példánynak (`kijelzo.py --action …`). Igaz, ha volt kinek elküldeni."""
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        s.settimeout(2)
-        s.connect(str(SOCKET_PATH))
-        s.sendall(f"action:{action}\n".encode())
+        client.settimeout(2)
+        client.connect(str(SOCKET_PATH))
+        client.sendall(f"action:{action}\n".encode())
         return True
     except OSError:
         return False
     finally:
-        s.close()
+        client.close()
 
 
-def show_signaled(srv, ms, on_action=None):
+def show_signaled(srv, timeout_ms, on_action=None):
     """Igaz, ha a második indítás panelt kért a várakozás alatt; az `action:` üzenetet az on_action(akció) kapja meg."""
-    srv.settimeout(ms / 1000.0)
+    srv.settimeout(timeout_ms / 1000.0)
     try:
         conn, _ = srv.accept()
     except (TimeoutError, OSError):
@@ -171,9 +171,9 @@ def open_shortcut_settings():
     return False
 
 
-def open_native(p):
+def open_native(path):
     """Fájl/mappa megnyitása az alapértelmezett programmal."""
-    subprocess.Popen(["xdg-open", str(p)])
+    subprocess.Popen(["xdg-open", str(path)])
 
 
 def start_process_events(on_event, on_lost):

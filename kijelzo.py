@@ -31,8 +31,8 @@ def send_action_cli(text):
 
 def main():
     if "--action" in sys.argv:
-        i = sys.argv.index("--action")
-        sys.exit(send_action_cli(sys.argv[i + 1] if i + 1 < len(sys.argv) else ""))
+        action_index = sys.argv.index("--action")
+        sys.exit(send_action_cli(sys.argv[action_index + 1] if action_index + 1 < len(sys.argv) else ""))
     from gui import run_app
     run_app("--tray" in sys.argv)
 

@@ -20,36 +20,36 @@ SCRIPTS = {"linux/install.sh": "install.sh", "linux/uninstall.sh": "uninstall.sh
 
 
 def version():
-    m = re.search(r'^VERSION = "(.+?)"', (ROOT / "consts.py").read_text(encoding="utf-8"), re.MULTILINE)
-    if not m:
+    match = re.search(r'^VERSION = "(.+?)"', (ROOT / "consts.py").read_text(encoding="utf-8"), re.MULTILINE)
+    if not match:
         sys.exit("Nincs VERSION a consts.py-ban.")
-    return m.group(1)
+    return match.group(1)
 
 
 def local_imports(path, modules):
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     found = set()
     for node in ast.walk(tree):
-        names = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module] if isinstance(node, ast.ImportFrom) and node.module else []
-        found |= {n.split(".")[0] for n in names} & modules
+        names = [alias.name for alias in node.names] if isinstance(node, ast.Import) else [node.module] if isinstance(node, ast.ImportFrom) and node.module else []
+        found |= {name.split(".")[0] for name in names} & modules
     return found
 
 
 def main():
     ver = version()
-    sources = sorted(p for p in ROOT.glob("*.py") if p.name not in EXCLUDE)
-    modules = {p.stem for p in ROOT.glob("*.py")}
-    packaged = {p.stem for p in sources}
+    sources = sorted(path for path in ROOT.glob("*.py") if path.name not in EXCLUDE)
+    modules = {path.stem for path in ROOT.glob("*.py")}
+    packaged = {path.stem for path in sources}
 
     problems = []
-    for p in sources:
+    for path in sources:
         try:
-            compile(p.read_text(encoding="utf-8"), str(p), "exec")
-        except SyntaxError as e:
-            problems.append(f"{p.name}: szintaxishiba: {e}")
-        missing = local_imports(p, modules) - packaged - PLATFORM_ONLY
+            compile(path.read_text(encoding="utf-8"), str(path), "exec")
+        except SyntaxError as error:
+            problems.append(f"{path.name}: szintaxishiba: {error}")
+        missing = local_imports(path, modules) - packaged - PLATFORM_ONLY
         if missing:
-            problems.append(f"{p.name}: a csomagból hiányzó modul: {', '.join(sorted(missing))}")
+            problems.append(f"{path.name}: a csomagból hiányzó modul: {', '.join(sorted(missing))}")
     for name in DATA_FILES + list(SCRIPTS):
         if not (ROOT / name).is_file():
             problems.append(f"hiányzó fájl: {name}")
@@ -67,8 +67,8 @@ def main():
         tar.addfile(info, io.BytesIO(data))
 
     with tarfile.open(target, "w:gz") as tar:
-        for p in sources:
-            add(tar, p.read_bytes().replace(b"\r\n", b"\n"), p.name, 0o755 if p.name == "kijelzo.py" else 0o644)
+        for path in sources:
+            add(tar, path.read_bytes().replace(b"\r\n", b"\n"), path.name, 0o755 if path.name == "kijelzo.py" else 0o644)
         for name in DATA_FILES:
             data = (ROOT / name).read_bytes()
             add(tar, data if name.endswith(".ico") else data.replace(b"\r\n", b"\n"), name, 0o644)

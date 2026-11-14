@@ -11,8 +11,8 @@ GAMMA_SCALE = 2.2                     # a panelen NVIDIA-skálás gamma (1,00 = 
 class Row(NamedTuple):
     key: str
     caption: str
-    lo: float
-    hi: float
+    minimum: float
+    maximum: float
     step: float
     default: float
 
@@ -47,7 +47,7 @@ class OverlayModel:
 
     def adjust(self, steps):
         row = ROWS[self.sel]
-        self.values[row.key] = round(max(row.lo, min(row.hi, self.values[row.key] + steps * row.step)), 2)
+        self.values[row.key] = round(max(row.minimum, min(row.maximum, self.values[row.key] + steps * row.step)), 2)
 
     def reset_row(self):
         row = ROWS[self.sel]
@@ -82,7 +82,7 @@ class OverlayModel:
         self.eng.sync(self.mid)
 
 
-BG, FG, DIM, ACCENT, WARN = "#14161a", "#ffffff", "#8a93a0", "#7fb2ff", "#ffb454"
+BACKGROUND, FOREGROUND, DIM, ACCENT, WARN = "#14161a", "#ffffff", "#8a93a0", "#7fb2ff", "#ffb454"
 WIDTH, MARGIN, ALPHA = 340, 24, 0.92
 HINT = "↑↓ sor · ←→ állít (Shift ×5) · Del alap\nEnter mentés · N új változat · Esc elvet"
 
@@ -113,29 +113,29 @@ class OverlayView:
         self.window = window
         window.withdraw()
         window.overrideredirect(True)
-        window.configure(bg=BG)
+        window.configure(bg=BACKGROUND)
         window.attributes("-topmost", True)
         window.attributes("-alpha", 0.0)
-        tk.Label(window, text="KÉPPROFIL · OVERLAY", fg=ACCENT, bg=BG, font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=16, pady=(12, 0))
-        self._title = tk.Label(window, bg=BG, fg=FG, font=("Segoe UI", 15, "bold"), anchor="w")
+        tk.Label(window, text="KÉPPROFIL · OVERLAY", fg=ACCENT, bg=BACKGROUND, font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=16, pady=(12, 0))
+        self._title = tk.Label(window, bg=BACKGROUND, fg=FOREGROUND, font=("Segoe UI", 15, "bold"), anchor="w")
         self._title.pack(fill="x", padx=16, pady=(0, 8))
-        grid = tk.Frame(window, bg=BG)
+        grid = tk.Frame(window, bg=BACKGROUND)
         grid.pack(fill="x", padx=16)
         self._marks, self._values = [], []
         for index, row in enumerate(ROWS):
-            mark = tk.Label(grid, bg=BG, fg=ACCENT, font=("Segoe UI", 12, "bold"), width=2, anchor="w")
+            mark = tk.Label(grid, bg=BACKGROUND, fg=ACCENT, font=("Segoe UI", 12, "bold"), width=2, anchor="w")
             mark.grid(row=index, column=0)
-            tk.Label(grid, text=row.caption, bg=BG, fg=FG, font=("Segoe UI", 12), anchor="w").grid(row=index, column=1, sticky="w")
-            val = tk.Label(grid, bg=BG, fg=FG, font=("Segoe UI", 12, "bold"), anchor="e", width=7)
+            tk.Label(grid, text=row.caption, bg=BACKGROUND, fg=FOREGROUND, font=("Segoe UI", 12), anchor="w").grid(row=index, column=1, sticky="w")
+            val = tk.Label(grid, bg=BACKGROUND, fg=FOREGROUND, font=("Segoe UI", 12, "bold"), anchor="e", width=7)
             val.grid(row=index, column=2, sticky="e")
             grid.columnconfigure(1, weight=1)
             self._marks.append(mark)
             self._values.append(val)
-        self._dirty = tk.Label(window, bg=BG, fg=WARN, font=("Segoe UI", 10), anchor="w")
+        self._dirty = tk.Label(window, bg=BACKGROUND, fg=WARN, font=("Segoe UI", 10), anchor="w")
         self._dirty.pack(fill="x", padx=16, pady=(8, 0))
-        self._warn = tk.Label(window, bg=BG, fg=WARN, font=("Segoe UI", 9), anchor="w", justify="left", wraplength=WIDTH - 32)
+        self._warn = tk.Label(window, bg=BACKGROUND, fg=WARN, font=("Segoe UI", 9), anchor="w", justify="left", wraplength=WIDTH - 32)
         self._warn.pack(fill="x", padx=16)
-        tk.Label(window, text=HINT, bg=BG, fg=DIM, font=("Segoe UI", 9), anchor="w", justify="left").pack(fill="x", padx=16, pady=(8, 12))
+        tk.Label(window, text=HINT, bg=BACKGROUND, fg=DIM, font=("Segoe UI", 9), anchor="w", justify="left").pack(fill="x", padx=16, pady=(8, 12))
         self.update(model, warning)
         window.update_idletasks()
         window_height = window.winfo_reqheight()
@@ -166,7 +166,7 @@ class OverlayView:
         self._title.configure(text=model.title())
         for index, row in enumerate(ROWS):
             self._marks[index].configure(text="▶" if index == model.sel else "")
-            self._values[index].configure(text=format_value(row, model.values[row.key]), fg=ACCENT if index == model.sel else FG)
+            self._values[index].configure(text=format_value(row, model.values[row.key]), fg=ACCENT if index == model.sel else FOREGROUND)
         self._dirty.configure(text="● mentetlen módosítás" if model.dirty() else "")
         self._warn.configure(text=warning)
 
