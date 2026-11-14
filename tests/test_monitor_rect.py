@@ -1,6 +1,5 @@
 """A toast helye monitor nélkül: az aktív képernyő, nem a teljes (több monitoros) asztal."""
 import json
-import subprocess
 import sys
 import unittest
 from pathlib import Path

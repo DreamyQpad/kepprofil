@@ -11,7 +11,7 @@ from hw import Display, Rgb, find_dev, list_monitors, power_active, power_set
 def norm_proc(name):
     """A folyamatnév összehasonlítható alakja: kisbetűs, `.exe` nélkül; üres/None -> üres."""
     n = (name or "").lower()
-    return n[:-4] if n.endswith(".exe") else n
+    return n.removesuffix(".exe")
 
 
 class Engine:

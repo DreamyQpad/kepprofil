@@ -4,7 +4,6 @@ import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import engine  # noqa: E402

@@ -127,7 +127,7 @@ def send_action(action):
     try:
         s.settimeout(2)
         s.connect(str(SOCKET_PATH))
-        s.sendall(f"action:{action}\n".encode("utf-8"))
+        s.sendall(f"action:{action}\n".encode())
         return True
     except OSError:
         return False
@@ -140,7 +140,7 @@ def show_signaled(srv, ms, on_action=None):
     srv.settimeout(ms / 1000.0)
     try:
         conn, _ = srv.accept()
-    except (socket.timeout, OSError):
+    except (TimeoutError, OSError):
         return False
     try:
         conn.settimeout(1)

@@ -20,7 +20,7 @@ SCRIPTS = {"linux/install.sh": "install.sh", "linux/uninstall.sh": "uninstall.sh
 
 
 def version():
-    m = re.search(r'^VERSION = "(.+?)"', (ROOT / "consts.py").read_text(encoding="utf-8"), re.M)
+    m = re.search(r'^VERSION = "(.+?)"', (ROOT / "consts.py").read_text(encoding="utf-8"), re.MULTILINE)
     if not m:
         sys.exit("Nincs VERSION a consts.py-ban.")
     return m.group(1)
