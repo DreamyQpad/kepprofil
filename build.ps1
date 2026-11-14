@@ -1,5 +1,5 @@
 # Telepito epitese: powershell -ExecutionPolicy Bypass -File build.ps1
-# 1) ikon  2) PyInstaller csomag  3) Inno Setup -> out\Kijelzo-telepito.exe  4) masolat a Dokumentumok\telepitok mappaba
+# 1) ikon  2) PyInstaller csomag  3) Inno Setup -> out\Kijelzo-telepito.exe  4) verziozott masolat az E:\Development\Telepitok mappaba
 $ErrorActionPreference = 'Continue'   # a PyInstaller az allapotuzeneteit a hibacsatornan irja, ez nem hiba
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $py = "$root\.venv\Scripts\python.exe"
@@ -23,9 +23,10 @@ Set-Location $b
 $ver = (Select-String -Path "$root\consts.py" -Pattern '^VERSION = "(.+?)"').Matches[0].Groups[1].Value
 & $iscc /Q "/DAppVersion=$ver" "$b\telepito.iss"
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup hiba" }
-# mindig keszul egy masolat a Dokumentumok\telepitok mappaba is
-$docs = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'telepitok'
-New-Item -ItemType Directory -Force $docs | Out-Null
-Copy-Item "$root\out\Kepprofil-telepito.exe" $docs -Force
+# mindig keszul egy verziozott masolat az E:\Development\Telepitok (ekezetes: Telep+i-acute+t+o-double-acute+k) mappaba is
+$dest = 'E:\Development\Telep' + [char]0x00ED + 't' + [char]0x0151 + 'k'   # a fajl ASCII marad, a mappa neve: Telep + i-acute + t + o-double-acute + k
+New-Item -ItemType Directory -Force $dest | Out-Null
+$copy = Join-Path $dest "Kepprofil-telepito-v$ver.exe"
+Copy-Item "$root\out\Kepprofil-telepito.exe" $copy -Force
 "Kesz: $root\out\Kepprofil-telepito.exe"
-"Masolat: $docs\Kepprofil-telepito.exe"
+"Masolat: $copy"
