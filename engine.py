@@ -416,13 +416,23 @@ class Engine:
         """A figyelő-szál törzse. A `start_events(on_event, on_lost)` eseményforrást ad (van `stop()`-ja) vagy None-t;
         az indítás is ebben a szálban fut, hogy ne tartsa fel a felületet."""
         if start_events:
-            self.events = start_events(self.proc_event, self._events_lost)
-            if self.events:
-                self.refresh_running()                         # induló pillanatkép, ehhez adnak hozzá az események
-                self.event_mode = True
-                self.say("Játékfigyelő: események")
-            else:
-                self.say("Játékfigyelő: lekérdezés (nincs emelt jog vagy az eseményforrás nem elérhető)")
+            why = "nincs emelt jog vagy az eseményforrás nem elérhető"
+            try:
+                self.events = start_events(self.proc_event, self._events_lost)
+                if self.events:
+                    self.refresh_running()                     # induló pillanatkép, ehhez adnak hozzá az események
+                    self.event_mode = True
+                    self.say("Játékfigyelő: események")
+            except Exception as e:                             # a forrás hibája nem ölheti meg a figyelőt: marad a lekérdezés
+                why = f"az eseményforrás hibázott: {e.__class__.__name__}: {e}"
+                if self.events:
+                    try:
+                        self.events.stop()
+                    except Exception:
+                        pass
+                    self.events = None
+            if not self.event_mode:
+                self.say(f"Játékfigyelő: lekérdezés ({why})")
         while not self.stop:
             try:
                 self.watch_tick()

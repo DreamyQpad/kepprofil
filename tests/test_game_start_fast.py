@@ -163,6 +163,53 @@ class GameStartFastTest(unittest.TestCase):
         self.assertIn("Játékfigyelő: lekérdezés", log_text(eng))
         self.assertIn("nincs emelt jog", log_text(eng))
 
+    def test_forras_inditasi_kivetele_utan_a_lekerdezes_marad_es_a_ciklus_fut(self):
+        eng, _ = make_engine(self, active=None)
+        eng.POLL_SECONDS = 0.01
+        ticks = []
+
+        def tick():
+            ticks.append(1)
+            if len(ticks) >= 2:
+                eng.stop = True
+
+        def boom(on_event, on_lost):
+            raise OSError("nincs jog")
+
+        eng.watch_tick = tick
+        eng.watch_loop(start_events=boom)
+        self.assertFalse(eng.event_mode)
+        self.assertIsNone(eng.events)
+        self.assertIn("Játékfigyelő: lekérdezés", log_text(eng))
+        self.assertEqual(len(ticks), 2)
+
+    def test_indulo_pillanatkep_hibaja_leallitja_a_forrast_es_a_ciklus_fut(self):
+        eng, _ = make_engine(self, active=None)
+        eng.POLL_SECONDS = 0.01
+        made = []
+
+        def start_events(on_event, on_lost):
+            made.append(FakeSource(on_event, on_lost))
+            return made[0]
+
+        def snapshot_boom():
+            raise RuntimeError("psutil hiba")
+
+        ticks = []
+
+        def tick():
+            ticks.append(1)
+            eng.stop = True
+
+        eng.refresh_running = snapshot_boom
+        eng.watch_tick = tick
+        eng.watch_loop(start_events=start_events)
+        self.assertFalse(eng.event_mode)
+        self.assertTrue(made[0].stopped)
+        self.assertIsNone(eng.events)
+        self.assertIn("Játékfigyelő: lekérdezés", log_text(eng))
+        self.assertEqual(len(ticks), 1)
+
     def test_eseményfolyam_megszakadasa_visszaall_lekerdezesre(self):
         eng, _, src = started_engine(self)
         eng.watch_wake.clear()
