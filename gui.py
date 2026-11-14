@@ -12,8 +12,7 @@ from config import (BACKUP_DIR, write_log, SETTINGS_KEYS, _read_json, _write_jso
                     normalize_config, pgain, pvals, valid_config)
 from consts import APP_NAME, DATA_DIR, LOG_FILE, NEUTRAL, RES_DIR, VERSION
 from engine import Engine
-from hw import (Hotkeys, SystemEvents, find_dev, foreground_monitor_id, monitor_rect, overlay_style, parse_hotkey,
-                power_plans)
+from hw import (Hotkeys, SystemEvents, find_dev, foreground_monitor_id, monitor_rect, overlay_style, power_plans)
 from hw_common import build_action
 from overlay import OverlayController
 from system import (SHORTCUT_HELP, action_command, autostart_enabled, ensure_launcher, kill_old_watcher, open_native,
@@ -55,8 +54,9 @@ def start_tray(icon):
 
 def run_app(start_hidden):
     import customtkinter as ctk
-    from tkinter import colorchooser, filedialog, messagebox
+    from tkinter import filedialog, messagebox
     import pystray
+    from gui_widgets import GREY_BUTTON, MUTED_TEXT, HotkeyEntry, RgbPicker, build_slider, section_title
     if sys.platform.startswith("linux") and pystray.Icon.__module__.endswith("_xorg"):
         # A pystray xorg backendje 1x1-es ablakot hoz létre, és egy valódi tálcakezelő méretezi át. Plasma Waylanden az
         # xembedsniproxy nem méretez, ezért az ikon 1x1 pixeles (egyszínű négyzet) maradna: az ablakot itt állítjuk be.
@@ -110,119 +110,9 @@ def run_app(start_hidden):
     ico = RES_DIR / "assets" / "icon.ico"
     if ico.is_file() and sys.platform == "win32":
         root.after(300, lambda: root.iconbitmap(str(ico)))
-    MUTED = ("gray40", "gray60")
-    GREY = dict(fg_color=("gray75", "gray30"), hover_color=("gray65", "gray40"), text_color=("gray10", "gray90"))
     ui, cur = {}, {"mid": None, "name": None, "variant": None, "loading": False, "job": None}
     plans = power_plans()
     PLAN_NONE = "Nem változtat"
-    RGB_MODES = {"Nem változtat": "none", "Kikapcsolva": "off", "Szín": "color", "Mentett állapot": "snapshot",
-                 "OpenRGB-profil": "profile"}
-
-    # ---- kis összetett vezérlők
-    class HotkeyEntry(ctk.CTkFrame):
-        def __init__(self, parent, on_change=None):
-            super().__init__(parent, fg_color="transparent")
-            self.on_change, self.value = on_change, ""
-            self.entry = ctk.CTkEntry(self, width=200, placeholder_text="kattints ide, és nyomd meg a gombokat")
-            self.entry.pack(side="left")
-            self.entry.bind("<KeyPress>", self._key)
-            ctk.CTkButton(self, text="Törlés", width=64, command=lambda: self.set("", True), **GREY).pack(
-                side="left", padx=(8, 0))
-
-        def set(self, text, notify=False):
-            self.value = text
-            self.entry.delete(0, "end")
-            if text:
-                self.entry.insert(0, text)
-            if notify and self.on_change:
-                self.on_change(text)
-
-        def get(self):
-            return self.value
-
-        def _key(self, ev):
-            ks = ev.keysym
-            if ks in ("Control_L", "Control_R", "Alt_L", "Alt_R", "Shift_L", "Shift_R", "Win_L", "Win_R", "Caps_Lock"):
-                return "break"
-            if ks == "BackSpace":
-                self.set("", True)
-                return "break"
-            names = {"Escape": "Esc", "space": "Space", "Insert": "Insert", "Delete": "Delete", "Home": "Home",
-                     "End": "End", "Prior": "PageUp", "Next": "PageDown", "Up": "Up", "Down": "Down", "Left": "Left",
-                     "Right": "Right", "Pause": "Pause"}
-            if ks in names:
-                key = names[ks]
-            elif re.fullmatch(r"F\d{1,2}", ks):
-                key = ks
-            elif re.fullmatch(r"KP_\d", ks):
-                key = "Num" + ks[-1]
-            elif len(ks) == 1 and ks.isalnum():
-                key = ks.upper()
-            else:
-                return "break"
-            mods = (["Ctrl"] if ev.state & 0x4 else []) + (["Alt"] if ev.state & 0x20000 else []) + \
-                   (["Shift"] if ev.state & 0x1 else [])
-            text = "+".join(mods + [key])
-            if parse_hotkey(text):
-                self.set(text, True)
-            else:
-                self.entry.delete(0, "end")
-                self.entry.insert(0, "legalább egy Ctrl/Alt/Shift kell")
-            return "break"
-
-    class RgbPicker(ctk.CTkFrame):
-        def __init__(self, parent, on_change=None):
-            super().__init__(parent, fg_color="transparent")
-            self.on_change, self.color, self.snap = on_change, "#ff8800", None
-            self.menu = ctk.CTkOptionMenu(self, values=list(RGB_MODES), width=150, command=self._mode)
-            self.menu.pack(side="left")
-            self.swatch = ctk.CTkButton(self, text="", width=60, command=self._pick, fg_color=self.color,
-                                        hover_color=self.color)
-            self.name = ctk.CTkEntry(self, width=150, placeholder_text="profil neve")
-            self.name.bind("<KeyRelease>", lambda e: self._changed())
-            self._mode(self.menu.get(), notify=False)
-
-        def _mode(self, label, notify=True):
-            mode = RGB_MODES[label]
-            self.swatch.pack_forget()
-            self.name.pack_forget()
-            if mode == "color":
-                self.swatch.pack(side="left", padx=(8, 0))
-            elif mode == "profile":
-                self.name.pack(side="left", padx=(8, 0))
-            if notify:
-                self._changed()
-
-        def _pick(self):
-            c = colorchooser.askcolor(color=self.color, title="RGB-szín", parent=self.winfo_toplevel())
-            if c and c[1]:
-                self.color = c[1]
-                self.swatch.configure(fg_color=self.color, hover_color=self.color)
-                self._changed()
-
-        def _changed(self):
-            if self.on_change:
-                self.on_change(self.get())
-
-        def get(self):
-            mode = RGB_MODES[self.menu.get()]
-            value = {"color": self.color, "profile": self.name.get().strip(), "snapshot": self.snap}.get(mode, "")
-            return {"mode": mode, "value": value}
-
-        def set(self, spec):
-            mode = (spec or {}).get("mode", "none")
-            label = next(k for k, v in RGB_MODES.items() if v == mode) if mode in RGB_MODES.values() else "Nem változtat"
-            self.menu.set(label)
-            value = (spec or {}).get("value", "")
-            if mode == "snapshot":
-                self.snap = value or None
-            if mode == "color" and re.fullmatch(r"#[0-9a-fA-F]{6}", value or ""):
-                self.color = value
-                self.swatch.configure(fg_color=value, hover_color=value)
-            self.name.delete(0, "end")
-            if mode == "profile" and value:
-                self.name.insert(0, value)
-            self._mode(label, notify=False)
 
     # ---- váz: felső sáv (monitor, preset, kapcsoló), fülek, alsó sáv
     page = ctk.CTkFrame(root, fg_color="transparent")
@@ -238,11 +128,11 @@ def run_app(start_hidden):
     ui["preset"].pack(side="left", padx=(8, 0))
     r = ctk.CTkFrame(top, fg_color="transparent")                 # alatta a gombok egy sorban, középen
     r.pack(pady=(12, 0))
-    ctk.CTkButton(r, text="Új…", width=76, command=lambda: new_preset_dialog(), **GREY).pack(side="left")
-    ctk.CTkButton(r, text="Másolás…", width=90, command=lambda: copy_preset_dialog(), **GREY).pack(side="left", padx=(8, 0))
-    ui["ren"] = ctk.CTkButton(r, text="Átnevezés…", width=100, command=lambda: rename_preset_dialog(), **GREY)
+    ctk.CTkButton(r, text="Új…", width=76, command=lambda: new_preset_dialog(), **GREY_BUTTON).pack(side="left")
+    ctk.CTkButton(r, text="Másolás…", width=90, command=lambda: copy_preset_dialog(), **GREY_BUTTON).pack(side="left", padx=(8, 0))
+    ui["ren"] = ctk.CTkButton(r, text="Átnevezés…", width=100, command=lambda: rename_preset_dialog(), **GREY_BUTTON)
     ui["ren"].pack(side="left", padx=(8, 0))
-    ui["del"] = ctk.CTkButton(r, text="Törlés", width=76, command=lambda: delete_preset(), **GREY)
+    ui["del"] = ctk.CTkButton(r, text="Törlés", width=76, command=lambda: delete_preset(), **GREY_BUTTON)
     ui["del"].pack(side="left", padx=(8, 0))
     ui["on"] = ctk.CTkSwitch(top, text="Be van kapcsolva", command=lambda: toggle_on())              # a gombok alatt
     ui["on"].pack(pady=(16, 16))
@@ -252,59 +142,9 @@ def run_app(start_hidden):
     for t in ("Kép", "Színek", "Játék és profil", "Éjszakai mód", "Program"):
         tabs.add(t)
 
-    class ValueBox(ctk.CTkEntry):
-        """A csúszka értéke: mutatja, és beírható (Enter / mezőelhagyás véglegesíti). configure(text=) mint a címkénél."""
-
-        def __init__(self, parent, commit):
-            super().__init__(parent, width=68, height=26, justify="right")
-            self._commit = commit
-            self.bind("<Return>", lambda e: self._done(True))
-            self.bind("<FocusOut>", lambda e: self._done(False))
-
-        def configure(self, **kw):
-            if "text" in kw:
-                t = kw.pop("text")
-                if self.focus_get() is not self._entry:           # gépelés közben ne írjuk felül
-                    state = self.cget("state")
-                    super().configure(state="normal")                # tiltott mezőbe sem lehet írni, ezért átmenetileg engedjük
-                    self.delete(0, "end")
-                    self.insert(0, t)
-                    super().configure(state=state)
-            if kw:
-                super().configure(**kw)
-
-        def _done(self, enter):
-            self._commit(self.get())
-            if enter:
-                self.winfo_toplevel().focus_set()
-
-    def slider(parent, caption, lo, hi, steps, fmt, default=None):
-        row = ctk.CTkFrame(parent, fg_color="transparent")
-        row.pack(fill="x", pady=(16, 0))
-        ctk.CTkLabel(row, text=caption).pack(side="left")
-        sl = ctk.CTkSlider(parent, from_=lo, to=hi, number_of_steps=steps, command=lambda v: on_slider())
-
-        def fire(v):
-            if sl.cget("state") == "disabled":
-                return
-            sl.set(v)
-            cmd = sl.cget("command")
-            (cmd or (lambda x: on_slider()))(v)
-
-        def typed(text):
-            try:
-                v = float(text.replace("%", "").replace(",", ".").strip())
-            except ValueError:
-                val.configure(text=fmt(sl.get()))                  # érvénytelen: marad a régi
-                return
-            fire(max(lo, min(hi, v)))
-
-        val = ValueBox(row, typed)
-        val.pack(side="right")
-        sl.pack(fill="x", pady=(5, 0))
-        if default is not None:
-            sl.bind("<Double-Button-1>", lambda e: fire(default))     # dupla kattintás: alapérték
-        return sl, val, fmt
+    def slider(parent, caption, low, high, steps, format_value, default=None):
+        """Csúszka-sor; a változásra az `on_slider` fut (később van definiálva, ezért a hívás pillanatában oldódik fel)."""
+        return build_slider(parent, caption, low, high, steps, format_value, on_change=lambda: on_slider(), default=default)
 
     # -- Kép
     t1 = tabs.tab("Kép")
@@ -317,10 +157,10 @@ def run_app(start_hidden):
     ui["var"].pack(side="left", padx=(8, 0))
     vb = ctk.CTkFrame(vr, fg_color="transparent")                 # alatta a 3 gomb, szintén középen
     vb.pack(pady=(12, 0))
-    ctk.CTkButton(vb, text="Új…", width=70, command=lambda: new_variant_dialog(), **GREY).pack(side="left")
-    ui["vren"] = ctk.CTkButton(vb, text="Átnevezés…", width=96, command=lambda: rename_variant_dialog(), **GREY)
+    ctk.CTkButton(vb, text="Új…", width=70, command=lambda: new_variant_dialog(), **GREY_BUTTON).pack(side="left")
+    ui["vren"] = ctk.CTkButton(vb, text="Átnevezés…", width=96, command=lambda: rename_variant_dialog(), **GREY_BUTTON)
     ui["vren"].pack(side="left", padx=(8, 0))
-    ui["vdel"] = ctk.CTkButton(vb, text="Törlés", width=70, command=lambda: delete_variant(), **GREY)
+    ui["vdel"] = ctk.CTkButton(vb, text="Törlés", width=70, command=lambda: delete_variant(), **GREY_BUTTON)
     ui["vdel"].pack(side="left", padx=(8, 0))
     vh = ctk.CTkFrame(t1, fg_color="transparent")
     vh.pack(fill="x", pady=(22, 0))
@@ -336,49 +176,46 @@ def run_app(start_hidden):
     ui["vhint"] = ctk.CTkLabel(t1, text="", anchor="w", justify="left", wraplength=560, text_color=("gray40", "gray60"))
     br = ctk.CTkFrame(t1, fg_color="transparent")
     br.pack(fill="x", pady=(28, 0))
-    ui["def"] = ctk.CTkButton(br, text="Preset alapértéke", width=140, command=lambda: preset_default(), **GREY)
+    ui["def"] = ctk.CTkButton(br, text="Preset alapértéke", width=140, command=lambda: preset_default(), **GREY_BUTTON)
     ui["def"].pack(side="left")
-    ctk.CTkButton(br, text="Semleges kép", width=120, command=lambda: neutral_now(), **GREY).pack(side="left", padx=(8, 0))
-    ui["cmp"] = ctk.CTkButton(br, text="Összehasonlítás (nyomva tartva)", width=210, **GREY)
+    ctk.CTkButton(br, text="Semleges kép", width=120, command=lambda: neutral_now(), **GREY_BUTTON).pack(side="left", padx=(8, 0))
+    ui["cmp"] = ctk.CTkButton(br, text="Összehasonlítás (nyomva tartva)", width=210, **GREY_BUTTON)
     ui["cmp"].pack(side="left", padx=(8, 0))
     ui["cmp"].bind("<ButtonPress-1>", lambda e: compare(True), add="+")
     ui["cmp"].bind("<ButtonRelease-1>", lambda e: compare(False), add="+")
     ctk.CTkLabel(t1, text="Amíg ez az ablak nyitva van, a csúszkák élőben hatnak, de mentés nélkül bezárva a mentett "
                           "állapot tér vissza. A \"Be van kapcsolva\" kapcsoló ettől független: az marad, ami be van kapcsolva.\n"
                           "Az érték a csúszka melletti mezőbe be is írható; dupla kattintás a csúszkán az alapértékre állítja.",
-                 text_color=MUTED, wraplength=520, justify="left").pack(anchor="w", pady=(20, 0))
+                 text_color=MUTED_TEXT, wraplength=520, justify="left").pack(anchor="w", pady=(20, 0))
 
     # -- Színek: R/G/B csatornák erősítése (100% = semleges; csökkentve az adott szín halványodik)
     t1b = tabs.tab("Színek")
     ui["cr"] = slider(t1b, "Vörös", 0, 100, 100, pct, default=100)
     ui["cg"] = slider(t1b, "Zöld", 0, 100, 100, pct, default=100)
     ui["cb"] = slider(t1b, "Kék", 0, 100, 100, pct, default=100)
-    ctk.CTkButton(t1b, text="Színek visszaállítása (100%)", width=210, command=lambda: reset_colors(), **GREY).pack(
+    ctk.CTkButton(t1b, text="Színek visszaállítása (100%)", width=210, command=lambda: reset_colors(), **GREY_BUTTON).pack(
         anchor="w", pady=(28, 0))
     ctk.CTkLabel(t1b, text="Csatornánként csökkentheted az erősítést: kevesebb kékkel melegebb, kevesebb vörössel "
                            "hidegebb a kép. 100% a semleges. A beállítás a kiválasztott változaté (vagy az alkalmazásé, ha nincs "
                            "változata), és együtt mentődik a többivel; az éjszakai mód ráteszi a magáét.",
-                 text_color=MUTED, wraplength=520, justify="left").pack(anchor="w", pady=(20, 0))
+                 text_color=MUTED_TEXT, wraplength=520, justify="left").pack(anchor="w", pady=(20, 0))
 
     # -- Játék és profil
     t2 = tabs.tab("Játék és profil")
 
-    def section(parent, text):
-        ctk.CTkLabel(parent, text=text, font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(14, 4))
-
-    section(t2, "Automatikus bekapcsolás")
+    section_title(t2, "Automatikus bekapcsolás")
     pr = ctk.CTkFrame(t2, fg_color="transparent")
     pr.pack(fill="x")
     ui["proc"] = ctk.CTkEntry(pr, width=200, placeholder_text="a játék exe-ja, pl. bf6")
     ui["proc"].pack(side="left")
-    ctk.CTkButton(pr, text="Futó programok…", width=130, command=lambda: running_dialog(), **GREY).pack(side="left", padx=(8, 0))
-    ctk.CTkButton(pr, text="Tallózás…", width=90, command=lambda: browse_exe(), **GREY).pack(side="left", padx=(8, 0))
+    ctk.CTkButton(pr, text="Futó programok…", width=130, command=lambda: running_dialog(), **GREY_BUTTON).pack(side="left", padx=(8, 0))
+    ctk.CTkButton(pr, text="Tallózás…", width=90, command=lambda: browse_exe(), **GREY_BUTTON).pack(side="left", padx=(8, 0))
     ctk.CTkLabel(t2, text="Ha ez a program elindul, a preset magától bekapcsol; kilépéskor kikapcsol. Üresen hagyva csak kézzel.",
-                 text_color=MUTED, wraplength=520, justify="left").pack(anchor="w", pady=(4, 0))
-    section(t2, "Gyorsgomb (be- és kikapcsolja a presetet)")
+                 text_color=MUTED_TEXT, wraplength=520, justify="left").pack(anchor="w", pady=(4, 0))
+    section_title(t2, "Gyorsgomb (be- és kikapcsolja a presetet)")
     ui["hotkey"] = HotkeyEntry(t2)
     ui["hotkey"].pack(anchor="w")
-    section(t2, "Profil: amikor a preset bekapcsol…")
+    section_title(t2, "Profil: amikor a preset bekapcsol…")
     r2 = ctk.CTkFrame(t2, fg_color="transparent")
     r2.pack(fill="x")
     ctk.CTkLabel(r2, text="Energiaprofil:", width=100, anchor="w").pack(side="left")
@@ -391,14 +228,14 @@ def run_app(start_hidden):
     ui["rgb"].pack(side="left")
     ctk.CTkLabel(t2, text="Kikapcsoláskor az energiaprofil visszaáll az előzőre, az RGB pedig az \"alap\" állapotra "
                           "(Program fül). A JBL EQ innen nem váltható, azt a JBL alkalmazás játékfelismerése kezeli.",
-                 text_color=MUTED, wraplength=520, justify="left").pack(anchor="w", pady=(8, 0))
+                 text_color=MUTED_TEXT, wraplength=520, justify="left").pack(anchor="w", pady=(8, 0))
 
     # -- Éjszakai mód
     t3 = tabs.tab("Éjszakai mód")
     ui["night"] = ctk.CTkSwitch(t3, text="Éjszakai mód bekapcsolva", command=lambda: night_click())
     ui["night"].pack(anchor="w", pady=(10, 0))
     ui["ns"] = slider(t3, "Erősség (melegebb, halványabb kép)", 0, 100, 100, pct, default=60)
-    section(t3, "Gyorsgomb")
+    section_title(t3, "Gyorsgomb")
     ui["nhk"] = HotkeyEntry(t3, on_change=lambda t: set_setting("night_hotkey", t))
     ui["nhk"].pack(anchor="w")
     ctk.CTkLabel(t3, text="A kapcsoló monitoronként külön működik: mindig a fent kiválasztott monitort érinti (a tálcamenüben "
@@ -406,7 +243,7 @@ def run_app(start_hidden):
                           "együtt kapcsolja: ha bárhol be van kapcsolva, mindenhol kikapcsol.\n"
                           "Csak akkor kapcsol be, ha te bekapcsolod; a program újraindításakor mindig kikapcsolt. Játék alatt "
                           "(ha annak a presetje be van kapcsolva az adott monitoron) szünetel, hogy a színek ne torzuljanak.",
-                 text_color=MUTED, wraplength=520, justify="left").pack(anchor="w", pady=(14, 0))
+                 text_color=MUTED_TEXT, wraplength=520, justify="left").pack(anchor="w", pady=(14, 0))
 
     # -- Program
     t4 = tabs.tab("Program")
@@ -417,43 +254,43 @@ def run_app(start_hidden):
     tr = ctk.CTkFrame(t4, fg_color="transparent")
     tr.pack(fill="x", pady=(6, 0))
     ctk.CTkButton(tr, text="Értesítés próbája", width=140, command=lambda: show_toast("Értesítés próba", cur["mid"]),
-                  **GREY).pack(side="left")
+                  **GREY_BUTTON).pack(side="left")
     ctk.CTkLabel(tr, text="Teljes képernyős (exkluzív) módú játék fölött nem látszik; ablak nélküli módban igen.",
-                 text_color=MUTED, wraplength=360, justify="left").pack(side="left", padx=(10, 0))
-    section(t4, "Gyorsgomb: változat léptetése (az éppen aktív játék következő változatára)")
+                 text_color=MUTED_TEXT, wraplength=360, justify="left").pack(side="left", padx=(10, 0))
+    section_title(t4, "Gyorsgomb: változat léptetése (az éppen aktív játék következő változatára)")
     ui["chk"] = HotkeyEntry(t4, on_change=lambda t: set_setting("cycle_hotkey", t))
     ui["chk"].pack(anchor="w")
     ctk.CTkLabel(t4, text="Egy gomb minden játéknál: azon a monitoron, ahol aktív a preset, a következő változatra lép, "
                           "az utolsó után újra az elsőre. Ha a presetnek nincsenek változatai, nem csinál semmit.",
-                 text_color=MUTED, wraplength=520, justify="left").pack(anchor="w", pady=(4, 0))
-    section(t4, "Gyorsgomb: játék-overlay (az aktuális játék profilja a játék fölött)")
+                 text_color=MUTED_TEXT, wraplength=520, justify="left").pack(anchor="w", pady=(4, 0))
+    section_title(t4, "Gyorsgomb: játék-overlay (az aktuális játék profilja a játék fölött)")
     ui["ovhk"] = HotkeyEntry(t4, on_change=lambda t: set_setting("overlay_hotkey", t))
     ui["ovhk"].pack(anchor="w")
     ctk.CTkLabel(t4, text="Ugyanaz a gomb nyitja és zárja. Nyitva: ↑↓ sor, ←→ állít (Shift: ×5), Del alapérték, Enter mentés, "
                           "N új változat a mostani állásból, Esc elvet. Amíg nyitva van, ezek a gombok nem jutnak el a játékhoz.",
-                 text_color=MUTED, wraplength=520, justify="left").pack(anchor="w", pady=(4, 0))
-    section(t4, "Gyorsgomb: semleges kép (minden kikapcsol)")
+                 text_color=MUTED_TEXT, wraplength=520, justify="left").pack(anchor="w", pady=(4, 0))
+    section_title(t4, "Gyorsgomb: semleges kép (minden kikapcsol)")
     ui["nehk"] = HotkeyEntry(t4, on_change=lambda t: set_setting("neutral_hotkey", t))
     ui["nehk"].pack(anchor="w")
-    section(t4, "RGB alapállapot (ide áll vissza, ha egy profil kikapcsol)")
+    section_title(t4, "RGB alapállapot (ide áll vissza, ha egy profil kikapcsol)")
     ui["base"] = RgbPicker(t4, on_change=lambda s: set_setting("base_rgb", s))
     ui["base"].pack(anchor="w")
-    ctk.CTkButton(t4, text="A mostani RGB-állapot mentése alapnak", width=270, command=lambda: save_base_rgb(), **GREY).pack(
+    ctk.CTkButton(t4, text="A mostani RGB-állapot mentése alapnak", width=270, command=lambda: save_base_rgb(), **GREY_BUTTON).pack(
         anchor="w", pady=(8, 0))
-    section(t4, "Mentés és visszatöltés")
+    section_title(t4, "Mentés és visszatöltés")
     bk = ctk.CTkFrame(t4, fg_color="transparent")
     bk.pack(fill="x")
-    ctk.CTkButton(bk, text="Exportálás…", width=120, command=lambda: export_all(), **GREY).pack(side="left")
-    ctk.CTkButton(bk, text="Importálás…", width=120, command=lambda: import_all(), **GREY).pack(side="left", padx=(8, 0))
+    ctk.CTkButton(bk, text="Exportálás…", width=120, command=lambda: export_all(), **GREY_BUTTON).pack(side="left")
+    ctk.CTkButton(bk, text="Importálás…", width=120, command=lambda: import_all(), **GREY_BUTTON).pack(side="left", padx=(8, 0))
     ctk.CTkLabel(t4, text=f"Az összes preset és beállítás egy fájlba. A program naponta egyszer maga is másolatot készít "
-                          f"(utolsó 10 marad): {BACKUP_DIR}", text_color=MUTED, wraplength=520, justify="left").pack(
+                          f"(utolsó 10 marad): {BACKUP_DIR}", text_color=MUTED_TEXT, wraplength=520, justify="left").pack(
         anchor="w", pady=(6, 0))
     lg = ctk.CTkFrame(t4, fg_color="transparent")
     lg.pack(fill="x", pady=(14, 0))
-    ctk.CTkButton(lg, text="Napló megnyitása", width=140, command=lambda: open_path(LOG_FILE), **GREY).pack(side="left")
-    ctk.CTkButton(lg, text="Adatmappa megnyitása", width=160, command=lambda: open_path(DATA_DIR), **GREY).pack(
+    ctk.CTkButton(lg, text="Napló megnyitása", width=140, command=lambda: open_path(LOG_FILE), **GREY_BUTTON).pack(side="left")
+    ctk.CTkButton(lg, text="Adatmappa megnyitása", width=160, command=lambda: open_path(DATA_DIR), **GREY_BUTTON).pack(
         side="left", padx=(8, 0))
-    ui["info"] = ctk.CTkLabel(t4, text="", text_color=MUTED, wraplength=520, justify="left")
+    ui["info"] = ctk.CTkLabel(t4, text="", text_color=MUTED_TEXT, wraplength=520, justify="left")
     ui["info"].pack(anchor="w", pady=(14, 0))
 
     # -- alsó sáv
@@ -462,7 +299,7 @@ def run_app(start_hidden):
     ctk.CTkButton(bot, text="Mentés a presetbe", width=160, command=lambda: save_preset()).pack(side="left")
     ui["dirty"] = ctk.CTkLabel(bot, text="", text_color=("#b45309", "#f59e0b"), width=150, anchor="w")   # mentetlen módosítás jelzése
     ui["dirty"].pack(side="left", padx=(12, 0))
-    ui["status"] = ctk.CTkLabel(bot, text="", text_color=MUTED, anchor="w", wraplength=240, justify="left")
+    ui["status"] = ctk.CTkLabel(bot, text="", text_color=MUTED_TEXT, anchor="w", wraplength=240, justify="left")
     ui["status"].pack(side="left", padx=12)
     tabs.pack_forget()                                              # a fülek az alsó sáv UTÁN kapjanak helyet
     tabs.pack(fill="both", expand=True, pady=(10, 0))
@@ -936,7 +773,7 @@ def run_app(start_hidden):
         foot = ctk.CTkFrame(top_, fg_color="transparent")
         foot.pack(fill="x", padx=16, pady=12)
         ctk.CTkButton(foot, text="Kiválaszt", width=100, command=ok).pack(side="right")
-        ctk.CTkButton(foot, text="Mégse", width=90, command=top_.destroy, **GREY).pack(side="right", padx=8)
+        ctk.CTkButton(foot, text="Mégse", width=90, command=top_.destroy, **GREY_BUTTON).pack(side="right", padx=8)
 
     def shortcuts_dialog():
         """Gyorsbillentyű-súgó (Linux): minden akció kész parancsa másolható, és a KDE Gyorsbillentyűk panel megnyitható."""
