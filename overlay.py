@@ -33,17 +33,17 @@ class OverlayModel:
         self.eng, self.mid, self.name = eng, mid, name
         self.sel = 0
         self.variant = eng.cur_variant(mid, name)
-        p = eng.preset(mid, name)
-        g, c, b, v = pvals(p, self.variant)
-        r, gr, bl = pgain(p, self.variant)
-        self.values = {"b": b, "c": c, "g": round(g / GAMMA_SCALE, 2), "v": v, "cr": r, "cg": gr, "cb": bl}
+        preset = eng.preset(mid, name)
+        gamma, contrast, brightness, vibrance = pvals(preset, self.variant)
+        red, green, blue = pgain(preset, self.variant)
+        self.values = {"b": brightness, "c": contrast, "g": round(gamma / GAMMA_SCALE, 2), "v": vibrance, "cr": red, "cg": green, "cb": blue}
         self.baseline = dict(self.values)
 
     def title(self):
         return f"{self.name} · {self.variant}" if self.variant else self.name
 
-    def move(self, d):
-        self.sel = (self.sel + d) % len(ROWS)
+    def move(self, step):
+        self.sel = (self.sel + step) % len(ROWS)
 
     def adjust(self, steps):
         row = ROWS[self.sel]
@@ -55,11 +55,11 @@ class OverlayModel:
 
     def vals(self):
         """(gamma a belső skálán, kontraszt, fényerő, vibrance) — a motor és a mentés formátuma."""
-        v = self.values
-        return round(v["g"] * GAMMA_SCALE, 4), round(v["c"]), round(v["b"]), round(v["v"])
+        current = self.values
+        return round(current["g"] * GAMMA_SCALE, 4), round(current["c"]), round(current["b"]), round(current["v"])
 
     def gain(self):
-        return [round(self.values[k]) for k in ("cr", "cg", "cb")]
+        return [round(self.values[key]) for key in ("cr", "cg", "cb")]
 
     def dirty(self):
         return self.values != self.baseline
@@ -109,64 +109,64 @@ class OverlayView:
         import tkinter as tk
         from hw import overlay_style
         self.close()
-        w = tk.Toplevel(self.root)
-        self.window = w
-        w.withdraw()
-        w.overrideredirect(True)
-        w.configure(bg=BG)
-        w.attributes("-topmost", True)
-        w.attributes("-alpha", 0.0)
-        tk.Label(w, text="KÉPPROFIL · OVERLAY", fg=ACCENT, bg=BG, font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=16, pady=(12, 0))
-        self._title = tk.Label(w, bg=BG, fg=FG, font=("Segoe UI", 15, "bold"), anchor="w")
+        window = tk.Toplevel(self.root)
+        self.window = window
+        window.withdraw()
+        window.overrideredirect(True)
+        window.configure(bg=BG)
+        window.attributes("-topmost", True)
+        window.attributes("-alpha", 0.0)
+        tk.Label(window, text="KÉPPROFIL · OVERLAY", fg=ACCENT, bg=BG, font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=16, pady=(12, 0))
+        self._title = tk.Label(window, bg=BG, fg=FG, font=("Segoe UI", 15, "bold"), anchor="w")
         self._title.pack(fill="x", padx=16, pady=(0, 8))
-        grid = tk.Frame(w, bg=BG)
+        grid = tk.Frame(window, bg=BG)
         grid.pack(fill="x", padx=16)
         self._marks, self._values = [], []
-        for i, row in enumerate(ROWS):
+        for index, row in enumerate(ROWS):
             mark = tk.Label(grid, bg=BG, fg=ACCENT, font=("Segoe UI", 12, "bold"), width=2, anchor="w")
-            mark.grid(row=i, column=0)
-            tk.Label(grid, text=row.caption, bg=BG, fg=FG, font=("Segoe UI", 12), anchor="w").grid(row=i, column=1, sticky="w")
+            mark.grid(row=index, column=0)
+            tk.Label(grid, text=row.caption, bg=BG, fg=FG, font=("Segoe UI", 12), anchor="w").grid(row=index, column=1, sticky="w")
             val = tk.Label(grid, bg=BG, fg=FG, font=("Segoe UI", 12, "bold"), anchor="e", width=7)
-            val.grid(row=i, column=2, sticky="e")
+            val.grid(row=index, column=2, sticky="e")
             grid.columnconfigure(1, weight=1)
             self._marks.append(mark)
             self._values.append(val)
-        self._dirty = tk.Label(w, bg=BG, fg=WARN, font=("Segoe UI", 10), anchor="w")
+        self._dirty = tk.Label(window, bg=BG, fg=WARN, font=("Segoe UI", 10), anchor="w")
         self._dirty.pack(fill="x", padx=16, pady=(8, 0))
-        self._warn = tk.Label(w, bg=BG, fg=WARN, font=("Segoe UI", 9), anchor="w", justify="left", wraplength=WIDTH - 32)
+        self._warn = tk.Label(window, bg=BG, fg=WARN, font=("Segoe UI", 9), anchor="w", justify="left", wraplength=WIDTH - 32)
         self._warn.pack(fill="x", padx=16)
-        tk.Label(w, text=HINT, bg=BG, fg=DIM, font=("Segoe UI", 9), anchor="w", justify="left").pack(fill="x", padx=16, pady=(8, 12))
+        tk.Label(window, text=HINT, bg=BG, fg=DIM, font=("Segoe UI", 9), anchor="w", justify="left").pack(fill="x", padx=16, pady=(8, 12))
         self.update(model, warning)
-        w.update_idletasks()
-        wh = w.winfo_reqheight()
-        l, t, r, b = rect
-        w.geometry(f"{WIDTH}x{wh}+{r - WIDTH - MARGIN}+{t + max(0, (b - t - wh) // 2)}")
-        w.deiconify()
-        w.update_idletasks()
+        window.update_idletasks()
+        window_height = window.winfo_reqheight()
+        left, top, right, bottom = rect
+        window.geometry(f"{WIDTH}x{window_height}+{right - WIDTH - MARGIN}+{top + max(0, (bottom - top - window_height) // 2)}")
+        window.deiconify()
+        window.update_idletasks()
         try:                                                  # átkattintható, nem aktiválódik, nincs tálcagomb
-            overlay_style(w)
+            overlay_style(window)
         except Exception:
             pass
-        self.hwnd = self._find_hwnd(w)
-        w.attributes("-alpha", ALPHA)
+        self.hwnd = self._find_hwnd(window)
+        window.attributes("-alpha", ALPHA)
 
     @staticmethod
-    def _find_hwnd(w):
+    def _find_hwnd(window):
         try:
             import ctypes
             user32 = ctypes.windll.user32
             user32.GetParent.restype = ctypes.c_void_p
-            return user32.GetParent(w.winfo_id()) or w.winfo_id()
+            return user32.GetParent(window.winfo_id()) or window.winfo_id()
         except Exception:
-            return w.winfo_id()
+            return window.winfo_id()
 
     def update(self, model, warning=""):
         if self.window is None:
             return
         self._title.configure(text=model.title())
-        for i, row in enumerate(ROWS):
-            self._marks[i].configure(text="▶" if i == model.sel else "")
-            self._values[i].configure(text=format_value(row, model.values[row.key]), fg=ACCENT if i == model.sel else FG)
+        for index, row in enumerate(ROWS):
+            self._marks[index].configure(text="▶" if index == model.sel else "")
+            self._values[index].configure(text=format_value(row, model.values[row.key]), fg=ACCENT if index == model.sel else FG)
         self._dirty.configure(text="● mentetlen módosítás" if model.dirty() else "")
         self._warn.configure(text=warning)
 
@@ -224,31 +224,31 @@ class OverlayController:
 
     def _warning(self):
         failed = self.hotkey_failed()
-        bad = [KEY_NAMES[a] for a in OVERLAY_KEYS if a in failed]
+        bad = [KEY_NAMES[action] for action in OVERLAY_KEYS if action in failed]
         return "Foglalt gomb, nem működik: " + ", ".join(bad) if bad else ""
 
     def key(self, action):
         if not self.is_open:
             return
-        m = self.model
+        model = self.model
         if action == "ov|save":
-            m.save()
+            model.save()
             self._finish(saved=True)
             return
         if action == "ov|close":
             self.close()
             return
         if action == "ov|new":
-            m.new_variant()
+            model.new_variant()
         elif action in ("ov|up", "ov|down"):
-            m.move(-1 if action == "ov|up" else 1)
+            model.move(-1 if action == "ov|up" else 1)
         elif action == "ov|reset":
-            m.reset_row()
+            model.reset_row()
             self._schedule_preview()
         elif action in ("ov|left", "ov|right", "ov|sleft", "ov|sright"):
-            m.adjust((-1 if "left" in action else 1) * (5 if action.startswith("ov|s") else 1))
+            model.adjust((-1 if "left" in action else 1) * (5 if action.startswith("ov|s") else 1))
             self._schedule_preview()
-        self.view.update(m, self._warning())
+        self.view.update(model, self._warning())
 
     def _schedule_preview(self):
         if self._job is None:
@@ -265,7 +265,7 @@ class OverlayController:
             self._finish(saved=False)
 
     def _finish(self, saved):
-        m, self.model = self.model, None
+        model, self.model = self.model, None
         if self._job is not None:
             self.root.after_cancel(self._job)
             self._job = None
@@ -277,15 +277,15 @@ class OverlayController:
             finally:
                 self.eng.panel_open = False
         if saved:
-            self.eng.sync(m.mid)
-            self.eng.toast(f"Mentve: {self.eng.label(m.mid, m.name)}", m.mid)
+            self.eng.sync(model.mid)
+            self.eng.toast(f"Mentve: {self.eng.label(model.mid, model.name)}", model.mid)
         else:
-            m.discard()
+            model.discard()
 
     def check(self):
         """Időzítve hívandó: bezár, ha a szerkesztett preset már nem az aktív (a játék kilépett, preset-váltás), vagy a főablak látszik."""
         if not self.is_open:
             return
-        m = self.model
-        if self.eng.active.get(m.mid) != m.name or self.eng.preset(m.mid, m.name) is None or self.main_visible():
+        model = self.model
+        if self.eng.active.get(model.mid) != model.name or self.eng.preset(model.mid, model.name) is None or self.main_visible():
             self.close()

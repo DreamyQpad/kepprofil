@@ -20,12 +20,12 @@ class Rgb:
         """Az összes eszköz jelenlegi módja és színei (a szolgáltatásként futó OpenRGB nem ment profilt SDK-n át)."""
         try:
             snap = []
-            for d in self._conn().devices:
-                m = d.modes[d.active_mode]
-                snap.append({"name": d.name, "mode": d.active_mode,
-                             "colors": [[c.red, c.green, c.blue] for c in d.colors],          # LED-ek (Direct módban)
-                             "mode_colors": [[c.red, c.green, c.blue] for c in (m.colors or [])],
-                             "brightness": m.brightness, "speed": m.speed, "direction": m.direction})
+            for device in self._conn().devices:
+                mode = device.modes[device.active_mode]
+                snap.append({"name": device.name, "mode": device.active_mode,
+                             "colors": [[color.red, color.green, color.blue] for color in device.colors],          # LED-ek (Direct módban)
+                             "mode_colors": [[color.red, color.green, color.blue] for color in (mode.colors or [])],
+                             "brightness": mode.brightness, "speed": mode.speed, "direction": mode.direction})
             return snap
         except Exception:
             self.client = None
@@ -38,36 +38,36 @@ class Rgb:
         if mode == "none":
             return
         try:
-            c = self._conn()
+            connection = self._conn()
             if mode == "off":
-                c.clear()
+                connection.clear()
             elif mode == "snapshot" and value:
                 from openrgb.utils import RGBColor
                 from openrgb.utils import ModeColors
-                for d, s in zip(c.devices, value):
-                    if d.name != s["name"] or s["mode"] >= len(d.modes):
+                for device, state in zip(connection.devices, value):
+                    if device.name != state["name"] or state["mode"] >= len(device.modes):
                         continue
-                    m = d.modes[s["mode"]]
-                    if s.get("mode_colors"):
-                        m.colors = [RGBColor(*x) for x in s["mode_colors"]]
+                    device_mode = device.modes[state["mode"]]
+                    if state.get("mode_colors"):
+                        device_mode.colors = [RGBColor(*rgb) for rgb in state["mode_colors"]]
                     for attr in ("brightness", "speed", "direction"):
-                        if s.get(attr) is not None and getattr(m, attr) is not None:
-                            setattr(m, attr, s[attr])
-                    d.set_mode(m)
-                    if m.color_mode == ModeColors.PER_LED:
-                        d.set_colors([RGBColor(*x) for x in s["colors"]])
+                        if state.get(attr) is not None and getattr(device_mode, attr) is not None:
+                            setattr(device_mode, attr, state[attr])
+                    device.set_mode(device_mode)
+                    if device_mode.color_mode == ModeColors.PER_LED:
+                        device.set_colors([RGBColor(*rgb) for rgb in state["colors"]])
             elif mode == "profile" and value:
-                c.load_profile(value)
+                connection.load_profile(value)
             elif mode == "color":
                 from openrgb.utils import RGBColor
                 col = RGBColor(int(value[1:3], 16), int(value[3:5], 16), int(value[5:7], 16))
-                for d in c.devices:
-                    mode_names = {m.name.lower(): m.name for m in d.modes}
+                for device in connection.devices:
+                    mode_names = {device_mode.name.lower(): device_mode.name for device_mode in device.modes}
                     for want in ("direct", "static", "custom"):
                         if want in mode_names:
-                            d.set_mode(mode_names[want])
+                            device.set_mode(mode_names[want])
                             break
-                    d.set_color(col)
+                    device.set_color(col)
         except Exception:
             self.client = None
             raise
@@ -89,27 +89,27 @@ NAMED_KEYS = {"esc": 0x1B, "space": 0x20, "insert": 0x2D, "delete": 0x2E, "home"
 
 def parse_hotkey(text):
     """'Ctrl+Alt+1' -> (módosítók, vk) vagy None, ha hibás."""
-    parts = [p.strip().lower() for p in (text or "").split("+") if p.strip()]
+    parts = [part.strip().lower() for part in (text or "").split("+") if part.strip()]
     if not parts:
         return None
     key, mods = parts[-1], 0
-    for p in parts[:-1]:
-        if p not in MODS:
+    for part in parts[:-1]:
+        if part not in MODS:
             return None
-        mods |= MODS[p]
+        mods |= MODS[part]
     if re.fullmatch(r"[a-z0-9]", key):
-        vk = ord(key.upper())
+        virtual_key = ord(key.upper())
     elif re.fullmatch(r"f(\d{1,2})", key) and 1 <= int(key[1:]) <= 24:
-        vk = 0x6F + int(key[1:])
+        virtual_key = 0x6F + int(key[1:])
     elif re.fullmatch(r"num[0-9]", key):
-        vk = 0x60 + int(key[3])
+        virtual_key = 0x60 + int(key[3])
     elif key in NAMED_KEYS:
-        vk = NAMED_KEYS[key]
+        virtual_key = NAMED_KEYS[key]
     else:
         return None
-    if not mods and not (0x70 <= vk <= 0x87):          # módosító nélkül csak F-billentyű
+    if not mods and not (0x70 <= virtual_key <= 0x87):          # módosító nélkül csak F-billentyű
         return None
-    return mods, vk
+    return mods, virtual_key
 
 
 
@@ -135,8 +135,8 @@ def parse_action(text):
 
 def build_action(kind, *parts):
     """A `parse_action` ellentettje: preset | variant + részek -> parancssori akció (None, ha a nevek nem férnek bele)."""
-    if any(not x or "|" in x for x in parts):
+    if any(not part or "|" in part for part in parts):
         return None
-    if any(":" in x for x in parts):                                 # a kettőspontos nevekhez a belső alak való
+    if any(":" in part for part in parts):                                 # a kettőspontos nevekhez a belső alak való
         return "|".join([{"preset": "p", "variant": "v"}[kind], *parts])
     return ":".join([kind, *parts])

@@ -35,8 +35,8 @@ def write_log(text):
             LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
             if LOG_FILE.exists() and LOG_FILE.stat().st_size > LOG_MAX:
                 LOG_FILE.replace(LOG_FILE.with_suffix(".old.txt"))
-            with LOG_FILE.open("a", encoding="utf-8") as f:
-                f.write(time.strftime("%Y-%m-%d %H:%M:%S  ") + str(text).rstrip() + "\n")
+            with LOG_FILE.open("a", encoding="utf-8") as log_file:
+                log_file.write(time.strftime("%Y-%m-%d %H:%M:%S  ") + str(text).rstrip() + "\n")
     except OSError:
         pass
 
@@ -46,14 +46,14 @@ DEFAULT_SETTINGS = {"night_strength": 60, "night_hotkey": "", "neutral_hotkey": 
 
 
 def load_settings():
-    s = json.loads(json.dumps(DEFAULT_SETTINGS))
-    s.update(_read_json(SETTINGS_FILE, {}))
-    return s
+    settings = json.loads(json.dumps(DEFAULT_SETTINGS))
+    settings.update(_read_json(SETTINGS_FILE, {}))
+    return settings
 
 
-def new_preset(vals=NEUTRAL, process=""):
-    g, c, b, v = vals
-    return {"gamma": g, "contrast": c, "brightness": b, "vibrance": v, "process": process}
+def new_preset(values=NEUTRAL, process=""):
+    gamma, contrast, brightness, vibrance = values
+    return {"gamma": gamma, "contrast": contrast, "brightness": brightness, "vibrance": vibrance, "process": process}
 
 
 BACKUP_DIR = DATA_DIR / "backup"
@@ -69,8 +69,8 @@ def auto_backup():
         dst = BACKUP_DIR / f"presets-{time.strftime('%Y-%m-%d')}.json"
         if not dst.exists():
             shutil.copy2(CONFIG_FILE, dst)
-        for f in sorted(BACKUP_DIR.glob("presets-*.json"))[:-10]:
-            f.unlink()
+        for old_backup in sorted(BACKUP_DIR.glob("presets-*.json"))[:-10]:
+            old_backup.unlink()
     except OSError:
         pass
 
@@ -80,22 +80,22 @@ def valid_config(cfg):
     if not (isinstance(cfg, dict) and isinstance(cfg.get("monitors"), list)):
         return False
     num = (int, float)
-    for m in cfg["monitors"]:
-        if not (isinstance(m, dict) and isinstance(m.get("id"), str) and isinstance(m.get("presets", {}), dict)):
+    for monitor in cfg["monitors"]:
+        if not (isinstance(monitor, dict) and isinstance(monitor.get("id"), str) and isinstance(monitor.get("presets", {}), dict)):
             return False
-        for p in m.get("presets", {}).values():
-            if not (isinstance(p, dict) and all(isinstance(p.get(k), num) and not isinstance(p.get(k), bool)
-                                                for k in ("gamma", "contrast", "brightness"))):
+        for preset in monitor.get("presets", {}).values():
+            if not (isinstance(preset, dict) and all(isinstance(preset.get(key), num) and not isinstance(preset.get(key), bool)
+                                                for key in ("gamma", "contrast", "brightness"))):
                 return False
-            vs = p.get("variants")
-            if vs is not None and not (isinstance(vs, dict) and all(
-                    isinstance(v, dict) and all(isinstance(v.get(k), num) and not isinstance(v.get(k), bool)
-                                                for k in ("gamma", "contrast", "brightness")) for v in vs.values())):
+            variants = preset.get("variants")
+            if variants is not None and not (isinstance(variants, dict) and all(
+                    isinstance(variant, dict) and all(isinstance(variant.get(key), num) and not isinstance(variant.get(key), bool)
+                                                for key in ("gamma", "contrast", "brightness")) for variant in variants.values())):
                 return False
-            for item in [p] + list((vs or {}).values()):
-                gn = item.get("gain")
-                if gn is not None and not (isinstance(gn, list) and len(gn) == 3 and all(
-                        isinstance(x, num) and not isinstance(x, bool) and 0 <= x <= 100 for x in gn)):
+            for item in [preset] + list((variants or {}).values()):
+                gain = item.get("gain")
+                if gain is not None and not (isinstance(gain, list) and len(gain) == 3 and all(
+                        isinstance(percent, num) and not isinstance(percent, bool) and 0 <= percent <= 100 for percent in gain)):
                     return False
     return True
 
@@ -121,42 +121,42 @@ def normalize_config(cfg):
 def add_new_monitors(cfg, found):
     """A found (list_monitors() formátum) listában szereplő, de a cfg-ben még nem ismert monitorok felvétele
     egy „Alap" presettel. Igaz, ha bővült a cfg."""
-    known = {m["id"].lower() for m in cfg["monitors"]}
+    known = {monitor["id"].lower() for monitor in cfg["monitors"]}
     added = False
-    for m in found:
-        if m["id"].lower() not in known:
-            cfg["monitors"].append({"id": m["id"], "name": f"Monitor {m['id']}", "presets": {BASE_PRESET_NAME: new_preset()}})
-            known.add(m["id"].lower())
+    for monitor in found:
+        if monitor["id"].lower() not in known:
+            cfg["monitors"].append({"id": monitor["id"], "name": f"Monitor {monitor['id']}", "presets": {BASE_PRESET_NAME: new_preset()}})
+            known.add(monitor["id"].lower())
             added = True
     return added
 
 
-def pvals(p, vname=None):
+def pvals(preset, variant_name=None):
     """(gamma, kontraszt, fényerő, vibrance) a presetből; ha van változata, annak az értékei."""
-    v = (p.get("variants") or {}).get(vname) or p
-    return (v["gamma"], v["contrast"], v["brightness"], v.get("vibrance", 50))
+    source = (preset.get("variants") or {}).get(variant_name) or preset
+    return (source["gamma"], source["contrast"], source["brightness"], source.get("vibrance", 50))
 
 
-def pgain(p, vname=None):
+def pgain(preset, variant_name=None):
     """Színcsatorna-erősítés százalékban [R, G, B]; 100 = semleges (a régi presetekben nincs: 100)."""
-    v = (p.get("variants") or {}).get(vname) or p
-    g = v.get("gain")
-    return [int(x) for x in g] if isinstance(g, (list, tuple)) and len(g) == 3 else [100, 100, 100]
+    source = (preset.get("variants") or {}).get(variant_name) or preset
+    gain = source.get("gain")
+    return [int(percent) for percent in gain] if isinstance(gain, (list, tuple)) and len(gain) == 3 else [100, 100, 100]
 
 
-def mirror_first(p):
+def mirror_first(preset):
     """Ha a presetnek vannak változatai, a felső szintű értékek az első változatot tükrözik (régi/idegen olvasóknak)."""
-    vs = p.get("variants")
-    if vs:
-        f = next(iter(vs.values()))
-        p.update(gamma=f["gamma"], contrast=f["contrast"], brightness=f["brightness"], vibrance=f.get("vibrance", 50))
-        if f.get("gain") is not None:
-            p["gain"] = f["gain"]
+    variants = preset.get("variants")
+    if variants:
+        first_variant = next(iter(variants.values()))
+        preset.update(gamma=first_variant["gamma"], contrast=first_variant["contrast"], brightness=first_variant["brightness"], vibrance=first_variant.get("vibrance", 50))
+        if first_variant.get("gain") is not None:
+            preset["gain"] = first_variant["gain"]
         else:
-            p.pop("gain", None)
+            preset.pop("gain", None)
 
 
 def night_mult(strength):
-    s = max(0, min(100, strength)) / 100.0
-    return (1 - 0.08 * s, 1 - 0.25 * s, 1 - 0.45 * s)
+    clamped = max(0, min(100, strength)) / 100.0
+    return (1 - 0.08 * clamped, 1 - 0.25 * clamped, 1 - 0.45 * clamped)
 
