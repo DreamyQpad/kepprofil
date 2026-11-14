@@ -2,7 +2,7 @@
 
     .venv\\Scripts\\python build_linux.py
 
-A csomag ugyanaz a kód, mint a Windowsos változat; kimarad belőle a Windows-réteg (hw_windows, system_windows), a build- és
+A csomag ugyanaz a kód, mint a Windowsos változat; kimarad belőle a Windows-réteg (hw_windows, system_windows, proc_events_windows), a build- és
 tesztfájlok. A csomagoló ellenőrzi, hogy minden betett modul lefordul, és semmi nem hivatkozik a csomagból hiányzó modulra."""
 import ast
 import io
@@ -13,7 +13,7 @@ import tarfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-EXCLUDE = {"hw_windows.py", "system_windows.py", "make_icon.py", "build_linux.py"}
+EXCLUDE = {"hw_windows.py", "system_windows.py", "proc_events_windows.py", "make_icon.py", "build_linux.py"}
 PLATFORM_ONLY = {"hw_windows", "system_windows"}              # a hw.py / system.py csak win32-n tölti be
 DATA_FILES = ["assets/icon.ico", "requirements.txt", "README.md", "LINUX.md"]
 SCRIPTS = {"linux/install.sh": "install.sh", "linux/uninstall.sh": "uninstall.sh"}

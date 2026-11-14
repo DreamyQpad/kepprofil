@@ -406,11 +406,14 @@ class Engine:
 
     # -- játékfigyelő
     POLL_SECONDS = 1.0 if sys.platform == "win32" else 2.0     # lekérdezéses módban ennyi másodpercenként fut a figyelő
-    RESYNC_SECONDS = 5.0                                       # eseménymódban ennyi másodpercenként olvassa újra a futó programokat
+    RESYNC_SECONDS = 5.0                                       # eseménymódban legfeljebb ennyi másodpercenként olvassa újra az összes futó programot
     START_DELAYS = (1.5, 4.0)                                  # a játék indulása utáni ellenőrzések késleltetése: a játék ekkor nullázhatja a görbét
 
     def watch_interval(self):
-        return self.RESYNC_SECONDS if self.event_mode else self.POLL_SECONDS
+        """A figyelő-ciklus várakozása mindkét módban `POLL_SECONDS`: eseménymódban is ennyi időnként fut az `enforce`
+        és derül ki egy csendesen elromlott eseményforrás. A teljes pillanatkép ritkább, a `running_t` időbélyeg
+        alapján a `watch_tick` kapuzza (`RESYNC_SECONDS`)."""
+        return self.POLL_SECONDS
 
     def watch_loop(self, start_events=None):
         """A figyelő-szál törzse. A `start_events(on_event, on_lost)` eseményforrást ad (van `stop()`-ja) vagy None-t;

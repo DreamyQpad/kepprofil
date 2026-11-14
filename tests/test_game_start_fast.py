@@ -109,7 +109,31 @@ class GameStartFastTest(unittest.TestCase):
         eng.event_mode = False
         self.assertEqual(eng.watch_interval(), Engine.POLL_SECONDS)
         eng.event_mode = True
-        self.assertEqual(eng.watch_interval(), Engine.RESYNC_SECONDS)
+        self.assertEqual(eng.watch_interval(), Engine.POLL_SECONDS)
+
+    def test_esemenymodban_a_varakozas_poll_ritmusu_a_teljes_pillanatkep_viszont_ritkabb(self):
+        """Eseménymódban is POLL_SECONDS-onként fut a tick (enforce, csendes forrás-romlás), de a teljes pillanatkép
+        csak RESYNC_SECONDS után."""
+        eng, _ = make_engine(self, active=None)
+        eng.monitors_t = 1e18
+        eng.refresh_running = mock.Mock()
+        eng.event_mode = True
+        eng.running_t = 1000.0
+        waits = []
+
+        def wait(timeout):
+            waits.append(timeout)
+            eng.stop = True
+            return False
+
+        eng.watch_wake = mock.Mock(wait=wait)
+        with mock.patch("engine.time.time", return_value=1000.0 + Engine.RESYNC_SECONDS - 0.1):
+            eng.watch_loop()
+        self.assertEqual(waits, [Engine.POLL_SECONDS])
+        eng.refresh_running.assert_not_called()                  # a pillanatkép még nem esedékes
+        with mock.patch("engine.time.time", return_value=1000.0 + Engine.RESYNC_SECONDS + 0.1):
+            eng.watch_tick()
+        self.assertEqual(eng.refresh_running.call_count, 1)      # lejárt a RESYNC_SECONDS: újraolvas
 
     def test_watch_loop_esemenyre_azonnal_fut(self):
         eng, _ = make_engine(self, active=None)
@@ -224,6 +248,28 @@ class GameStartFastTest(unittest.TestCase):
         eng, _, src = started_engine(self)
         eng.shutdown()
         self.assertTrue(src.stopped)
+
+    def test_esemenymodban_a_kihagyott_leallitasi_esemenyt_a_resync_javitja(self):
+        """Hamis „él még" (elveszett stop-esemény): a profil nem ragad be, a következő teljes pillanatkép után kikapcsol,
+        és az indulás előtti alap tér vissza."""
+        eng, display = make_engine(self, active=("MON1", "Alap"))
+        eng.event_mode = True
+        eng.monitors_t = 1e18
+        eng.running_t = time.time()                              # friss pillanatkép: a tick nem olvas újra
+        eng.refresh_running = mock.Mock()
+        with mock.patch("engine.threading.Timer"):
+            eng.proc_event(True, "game.exe")
+            eng.watch_tick()
+        self.assertEqual(eng.active["MON1"], "Játék")
+        self.assertEqual(last_vals(display)[3], 60)
+        eng.refresh_running.assert_not_called()
+
+        eng.refresh_running = mock.Mock(side_effect=lambda: eng.set_running([]))   # a valóság: a játék már nem fut
+        eng.running_t = time.time() - Engine.RESYNC_SECONDS - 1
+        eng.watch_tick()
+        eng.refresh_running.assert_called_once()
+        self.assertEqual(eng.active.get("MON1"), "Alap")
+        self.assertNotIn(("MON1", "Játék"), eng.auto)
 
     def test_proc_event_ebresztese_nem_var_a_zarra(self):
         """A figyelt név eseménye akkor is felébreszti a figyelőt, ha a `lock`-ot épp másik szál tartja (szinkron közben)."""
