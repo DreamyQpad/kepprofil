@@ -459,47 +459,63 @@ class Engine:
             t.start()
 
     def watch_tick(self):
+        """A figyelő egy köre: friss futó-program lista, monitor-ellenőrzés, majd monitoronként a játék-automatika."""
         if not self.event_mode or time.time() - self.running_t > self.RESYNC_SECONDS:
             self.refresh_running()
         if time.time() - self.monitors_t > self.MONITOR_POLL:
             self.refresh_monitors()
         for mon in self.mons():
-            mid = mon["id"]
-            for key in [k for k in self.manual_off if k[0] == mid]:
-                p = self.preset(*key)
-                if not (p and self.proc_running(p.get("process"))):
-                    self.manual_off.discard(key)               # a játék kilépett: újra automatikus
-            hit = next(((n, p) for n, p in mon["presets"].items()
-                        if p.get("process") and self.proc_running(p["process"]) and (mid, n) not in self.manual_off), None)
-            cur = self.active.get(mid)
-            if hit and cur != hit[0]:
-                with self.lock:
-                    if not (cur and (mid, cur) in self.auto):      # másik játék átvételekor a korábbi alap marad
-                        if cur:
-                            self.prev[mid] = cur
-                        else:
-                            self.prev.pop(mid, None)
-                    self.active[mid] = hit[0]
-                    self.variant.pop((mid, hit[0]), None)          # a játék indulásakor az első változat
-                    self.auto.add((mid, hit[0]))
-                    ok = self.sync(mid)
-                self.toast(self.label(mid, hit[0]), mid)
-                self.say(f"{mon['name']}: '{hit[0]}' bekapcsolt (játék elindult){'' if ok else ' – nem sikerült'}")
-                self.after_game_start()
-            elif cur and (mid, cur) in self.auto:
-                p = self.preset(mid, cur)
-                if not (p and p.get("process") and self.proc_running(p["process"])):
-                    with self.lock:
-                        self.active.pop(mid, None)
-                        self.auto.discard((mid, cur))
-                        back = self.prev.pop(mid, None)
-                        if back and self.preset(mid, back) is not None:
-                            self.active[mid] = back                # a játék előtti alap, nem a semleges kép
-                        self.sync(mid)
-                    self.say(f"{mon['name']}: '{cur}' kikapcsolt (a játék kilépett)"
-                             + (f", vissza: '{back}'" if self.active.get(mid) == back and back else ""))
-            if not (self.panel_open or self.hold):
-                self.enforce(mid)
+            self._watch_monitor(mon)
+
+    def _watch_monitor(self, mon):
+        mid = mon["id"]
+        self._forget_finished_manual_off(mid)
+        hit = next(((n, p) for n, p in mon["presets"].items()
+                    if p.get("process") and self.proc_running(p["process"]) and (mid, n) not in self.manual_off), None)
+        cur = self.active.get(mid)
+        if hit and cur != hit[0]:
+            self._game_started(mon, hit[0], cur)
+        elif cur and (mid, cur) in self.auto:
+            self._game_maybe_ended(mon, cur)
+        if not (self.panel_open or self.hold):
+            self.enforce(mid)
+
+    def _forget_finished_manual_off(self, mid):
+        for key in [k for k in self.manual_off if k[0] == mid]:
+            p = self.preset(*key)
+            if not (p and self.proc_running(p.get("process"))):
+                self.manual_off.discard(key)                   # a játék kilépett: újra automatikus
+
+    def _game_started(self, mon, name, cur):
+        mid = mon["id"]
+        with self.lock:
+            if not (cur and (mid, cur) in self.auto):          # másik játék átvételekor a korábbi alap marad
+                if cur:
+                    self.prev[mid] = cur
+                else:
+                    self.prev.pop(mid, None)
+            self.active[mid] = name
+            self.variant.pop((mid, name), None)                # a játék indulásakor az első változat
+            self.auto.add((mid, name))
+            ok = self.sync(mid)
+        self.toast(self.label(mid, name), mid)
+        self.say(f"{mon['name']}: '{name}' bekapcsolt (játék elindult){'' if ok else ' – nem sikerült'}")
+        self.after_game_start()
+
+    def _game_maybe_ended(self, mon, cur):
+        mid = mon["id"]
+        p = self.preset(mid, cur)
+        if p and p.get("process") and self.proc_running(p["process"]):
+            return
+        with self.lock:
+            self.active.pop(mid, None)
+            self.auto.discard((mid, cur))
+            back = self.prev.pop(mid, None)
+            if back and self.preset(mid, back) is not None:
+                self.active[mid] = back                        # a játék előtti alap, nem a semleges kép
+            self.sync(mid)
+        self.say(f"{mon['name']}: '{cur}' kikapcsolt (a játék kilépett)"
+                 + (f", vissza: '{back}'" if self.active.get(mid) == back and back else ""))
 
     def enforce(self, mid, why="felülírta a játék/driver"):
         """A játék vagy a driver nullázhatja a görbét: ha eltér a kívánttól, visszaállítjuk."""
