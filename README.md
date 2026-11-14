@@ -54,7 +54,13 @@ Egyetlen kódbázis, a platformfüggő részek külön modulban (`hw_windows.py`
 | `config.py` | presetek, beállítások, mentés, napló |
 | `engine.py` | motor: aktív presetek, játékfigyelő, visszaállítás, mellékhatások |
 | `overlay.py` | játék-overlay: modell (értékek, mentés), nem aktiválódó megjelenítő, vezérlő (nyitás, billentyűk) |
-| `gui.py` | felület (CustomTkinter), tálcaikon, értesítés |
+| `gui.py` | a felület belépője: a motor, a gyorsgombok, a tálca, az ablak és a főszál üzenetsorának összekötése |
+| `gui_layout.py` | a főablak elrendezése (fülek, elemek létrehozása), viselkedés nélkül |
+| `gui_panel.py` | a főablak viselkedése: kiválasztott monitor/preset/változat, csúszkák, mentés, állapotsor |
+| `gui_preset_dialogs.py` | a preset- és változatműveletek párbeszédei (név bekérése, megerősítés, fájlválasztás), a művelet a `preset_ops`-szal |
+| `gui_dialogs.py` | önálló párbeszédek: futó programok listája (játék kiválasztásához), gyorsbillentyű-súgó (Linux) |
+| `gui_tray.py` | tálcaikon: rajza, indítása, menüje |
+| `gui_toast.py` | képernyő-értesítés (kattintható-átlátszó, halványuló felirat a monitor tetején) |
 | `gui_widgets.py` | önálló felületi elemek: gyorsgomb-mező, RGB-választó, csúszka-sor |
 | `preset_ops.py` | preset- és változatműveletek (névellenőrzés, átnevezés, törlés, másolat, export/import), felület nélkül tesztelhetően |
 | `build.ps1`, `build_linux.py`, `linux/` | Windowsos telepítő építése; Linux-csomag építése és a benne lévő `install.sh` / `uninstall.sh` |
@@ -101,7 +107,6 @@ Telepítés Linuxon: [LINUX.md](LINUX.md).
 - Hibák jelzése a tálcaikonon (pl. nem elérhető NVAPI / OpenRGB), nem csak a naplóban.
 - Időzített éjszakai mód (napnyugta vagy fix időpont).
 - Színhőmérséklet-csúszka (Kelvin) az R/G/B erősítés mellé.
-- A `gui.py` további bontása: a `run_app` még egy nagy függvény (a vezérlők és a preset-műveletek már kiemeltek); hátra van a toast és a tálcamenü külön modulba, és a rövid helyi változónevek (`p`, `g`, `r`, `vr`…) beszédesebbre cserélése.
 
 **Linux** (részletesen: [LINUX.md](LINUX.md))
 - Globális gyorsgomb: futó példány parancsot fogad, a KDE gyorsbillentyűkhöz kötve.
