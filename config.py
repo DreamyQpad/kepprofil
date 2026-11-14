@@ -75,29 +75,44 @@ def auto_backup():
         pass
 
 
+NUMBER_TYPES = (int, float)
+BASE_VALUE_KEYS = ("gamma", "contrast", "brightness")
+
+
+def is_number(value):
+    """Szám (a bool nem az, bár az int leszármazottja)."""
+    return isinstance(value, NUMBER_TYPES) and not isinstance(value, bool)
+
+
+def has_base_values(entry):
+    """Igaz, ha az entry (preset vagy változat) szótár, és a gamma, kontraszt és fényerő száma megvan benne."""
+    return isinstance(entry, dict) and all(is_number(entry.get(key)) for key in BASE_VALUE_KEYS)
+
+
+def valid_gain(gain):
+    """A színcsatorna-erősítés hiányozhat; ha megvan, három százalékérték (0–100)."""
+    return gain is None or (isinstance(gain, list) and len(gain) == 3
+                            and all(is_number(percent) and 0 <= percent <= 100 for percent in gain))
+
+
+def valid_preset(preset):
+    if not has_base_values(preset):
+        return False
+    variants = preset.get("variants")
+    if variants is not None and not (isinstance(variants, dict) and all(has_base_values(variant) for variant in variants.values())):
+        return False
+    return all(valid_gain(item.get("gain")) for item in [preset] + list((variants or {}).values()))
+
+
+def valid_monitor(monitor):
+    return (isinstance(monitor, dict) and isinstance(monitor.get("id"), str) and isinstance(monitor.get("presets", {}), dict)
+            and all(valid_preset(preset) for preset in monitor.get("presets", {}).values()))
+
+
 def valid_config(cfg):
     """Igaz, ha a cfg olyan, mint egy presets.json: monitorok listája, bennük érvényes presetek."""
-    if not (isinstance(cfg, dict) and isinstance(cfg.get("monitors"), list)):
-        return False
-    num = (int, float)
-    for monitor in cfg["monitors"]:
-        if not (isinstance(monitor, dict) and isinstance(monitor.get("id"), str) and isinstance(monitor.get("presets", {}), dict)):
-            return False
-        for preset in monitor.get("presets", {}).values():
-            if not (isinstance(preset, dict) and all(isinstance(preset.get(key), num) and not isinstance(preset.get(key), bool)
-                                                for key in ("gamma", "contrast", "brightness"))):
-                return False
-            variants = preset.get("variants")
-            if variants is not None and not (isinstance(variants, dict) and all(
-                    isinstance(variant, dict) and all(isinstance(variant.get(key), num) and not isinstance(variant.get(key), bool)
-                                                for key in ("gamma", "contrast", "brightness")) for variant in variants.values())):
-                return False
-            for item in [preset] + list((variants or {}).values()):
-                gain = item.get("gain")
-                if gain is not None and not (isinstance(gain, list) and len(gain) == 3 and all(
-                        isinstance(percent, num) and not isinstance(percent, bool) and 0 <= percent <= 100 for percent in gain)):
-                    return False
-    return True
+    return (isinstance(cfg, dict) and isinstance(cfg.get("monitors"), list)
+            and all(valid_monitor(monitor) for monitor in cfg["monitors"]))
 
 
 def load_config():
