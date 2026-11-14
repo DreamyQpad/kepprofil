@@ -42,7 +42,7 @@ def edid_id(edid):
     if len(edid) < 12:
         return None
     code = (edid[8] << 8) | edid[9]
-    maker = "".join(chr(((code >> s) & 31) + 64) for s in (10, 5, 0))
+    maker = "".join(chr(((code >> shift) & 31) + 64) for shift in (10, 5, 0))
     return f"{maker}{edid[10] | (edid[11] << 8):04X}"
 
 
@@ -73,9 +73,9 @@ def read_edid(output):
 
 
 def kscreen_outputs():
-    r = run("kscreen-doctor", "-j")
+    result = run("kscreen-doctor", "-j")
     try:
-        return [o for o in json.loads(r.stdout)["outputs"] if o.get("enabled")] if r else []
+        return [output for output in json.loads(result.stdout)["outputs"] if output.get("enabled")] if result else []
     except (ValueError, KeyError, TypeError):
         return []
 
@@ -83,16 +83,16 @@ def kscreen_outputs():
 def list_monitors():
     """[{"id": "SAM777F", "dev": "HDMI-A-1"}]: az id az EDID-ből (mint Windowson), a dev a KDE kimenet neve."""
     out = []
-    for o in kscreen_outputs():
-        edid = read_edid(o["name"])
-        out.append({"id": (edid_id(edid) if edid else None) or o["name"], "dev": o["name"]})
+    for output in kscreen_outputs():
+        edid = read_edid(output["name"])
+        out.append({"id": (edid_id(edid) if edid else None) or output["name"], "dev": output["name"]})
     return out
 
 
 def find_dev(mid):
-    for m in list_monitors():
-        if m["id"].lower() == mid.lower():
-            return m["dev"]
+    for monitor in list_monitors():
+        if monitor["id"].lower() == mid.lower():
+            return monitor["dev"]
     return None
 
 
@@ -103,11 +103,11 @@ def active_output_name():
     for tool in ("qdbus6", "qdbus"):
         if not shutil.which(tool):
             continue
-        r = run(tool, "org.kde.KWin", "/KWin", "org.kde.KWin.activeOutputName", timeout=1)
-        if r is None:
+        result = run(tool, "org.kde.KWin", "/KWin", "org.kde.KWin.activeOutputName", timeout=1)
+        if result is None:
             return None
-        if r.returncode == 0 and r.stdout.strip():
-            return r.stdout.strip()
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
     return None
 
 
@@ -116,12 +116,12 @@ def monitor_rect(mid):
     megadott monitor nincs csatlakoztatva, az aktív képernyő téglalapja, hogy az értesítés ne az összes monitor
     együttes közepére (a két képernyő közti élre) kerüljön."""
     dev = (find_dev(mid) if mid else None) or active_output_name()
-    for o in kscreen_outputs():
-        if o["name"] == dev:
-            pos, size = o.get("pos") or {}, o.get("size") or {}
+    for output in kscreen_outputs():
+        if output["name"] == dev:
+            pos, size = output.get("pos") or {}, output.get("size") or {}
             if size.get("width"):
-                x, y = pos.get("x", 0), pos.get("y", 0)
-                return (x, y, x + size["width"], y + size["height"])
+                left, top = pos.get("x", 0), pos.get("y", 0)
+                return (left, top, left + size["width"], top + size["height"])
     return None
 
 
@@ -132,21 +132,21 @@ def foreground_monitor_id():
 
 # ---------------------------------------------------------------- ICC-profil
 
-def _s15(x):
-    return struct.pack(">i", round(x * 65536))
+def _s15(value):
+    return struct.pack(">i", round(value * 65536))
 
 
-def _xyz(x, y, z):
-    return b"XYZ \0\0\0\0" + _s15(x) + _s15(y) + _s15(z)
+def _xyz(cie_x, cie_y, cie_z):
+    return b"XYZ \0\0\0\0" + _s15(cie_x) + _s15(cie_y) + _s15(cie_z)
 
 
-def _text_tag(s):
-    return b"text\0\0\0\0" + s.encode() + b"\0"
+def _text_tag(text):
+    return b"text\0\0\0\0" + text.encode() + b"\0"
 
 
-def _desc_tag(s):
-    b = s.encode() + b"\0"
-    return b"desc\0\0\0\0" + struct.pack(">I", len(b)) + b + b"\0" * 8 + b"\0\0" + b"\0" * 67
+def _desc_tag(text):
+    raw = text.encode() + b"\0"
+    return b"desc\0\0\0\0" + struct.pack(">I", len(raw)) + raw + b"\0" * 8 + b"\0\0" + b"\0" * 67
 
 
 def build_icc(gamma, name, contrast=50, brightness=50, mult=(1.0, 1.0, 1.0)):
@@ -155,11 +155,11 @@ def build_icc(gamma, name, contrast=50, brightness=50, mult=(1.0, 1.0, 1.0)):
     if contrast == 50 and brightness == 50 and tuple(mult) == (1.0, 1.0, 1.0):
         curves = [b"curv\0\0\0\0" + struct.pack(">I", 1) + struct.pack(">H", round(gamma * 256))] * 3
     else:
-        k, b, n = 2 ** ((contrast - 50) / 50), (brightness - 50) / 50 * 0.25, 1024
+        contrast_factor, brightness_offset, size = 2 ** ((contrast - 50) / 50), (brightness - 50) / 50 * 0.25, 1024
         curves = []
-        for m in mult:
-            points = [round(min(1, max(0, (i / (n - 1) - 0.5 - b) / k + 0.5)) ** gamma * m * 65535) for i in range(n)]
-            curves.append(b"curv\0\0\0\0" + struct.pack(">I", n) + struct.pack(f">{n}H", *points))
+        for channel_gain in mult:
+            points = [round(min(1, max(0, (step / (size - 1) - 0.5 - brightness_offset) / contrast_factor + 0.5)) ** gamma * channel_gain * 65535) for step in range(size)]
+            curves.append(b"curv\0\0\0\0" + struct.pack(">I", size) + struct.pack(f">{size}H", *points))
     tags = {
         b"desc": _desc_tag(name), b"cprt": _text_tag("Public domain"), b"wtpt": _xyz(0.9642, 1.0, 0.8249),
         b"rXYZ": _xyz(0.4360747, 0.2225045, 0.0139322), b"gXYZ": _xyz(0.3850649, 0.7168786, 0.0971045),
@@ -184,19 +184,19 @@ def _clean_icc(output, keep=None):
 
 def apply_icc(output, gamma, contrast, brightness, mult):
     ICC_DIR.mkdir(parents=True, exist_ok=True)
-    tag = "-".join(f"{int(round(m * 1000))}" for m in mult)
+    tag = "-".join(f"{int(round(channel_gain * 1000))}" for channel_gain in mult)
     path = ICC_DIR / f"{PREFIX}-{output}-g{gamma:.2f}-c{int(contrast)}-b{int(brightness)}-m{tag}.icc"
     path.write_bytes(build_icc(gamma, f"Képprofil: gamma {gamma:.2f}, kontraszt {contrast}%, fényerő {brightness}%",
                                contrast, brightness, mult))
-    r = run("kscreen-doctor", f"output.{output}.iccprofile.{path}", f"output.{output}.colorProfileSource.ICC")
+    result = run("kscreen-doctor", f"output.{output}.iccprofile.{path}", f"output.{output}.colorProfileSource.ICC")
     _clean_icc(output, keep=path)
-    return bool(r and r.returncode == 0)
+    return bool(result and result.returncode == 0)
 
 
 def reset_icc(output):
-    r = run("kscreen-doctor", f"output.{output}.colorProfileSource.sRGB")
+    result = run("kscreen-doctor", f"output.{output}.colorProfileSource.sRGB")
     _clean_icc(output)
-    return bool(r and r.returncode == 0)
+    return bool(result and result.returncode == 0)
 
 
 # ---------------------------------------------------------------- vibrance (nvibrant)
@@ -208,7 +208,7 @@ def pct_to_raw(pct):
 
 def vibrance_index():
     try:
-        return {k: int(v) for k, v in json.loads(VIBRANCE_INDEX_FILE.read_text(encoding="utf-8")).items()}
+        return {output: int(level) for output, level in json.loads(VIBRANCE_INDEX_FILE.read_text(encoding="utf-8")).items()}
     except (OSError, ValueError, TypeError):
         return {"HDMI-A-1": 0, "HDMI-A-2": 3}          # a régi gép beállítása; máshol a vibrance_index.json-t kell megadni
 
@@ -237,30 +237,30 @@ class Display:
             return False, f"A(z) {dev} kimenet nincs a vibrance_index.json-ban."
         return True, ""
 
-    def apply(self, dev, vals, mult=(1.0, 1.0, 1.0)):
-        gamma, contrast, brightness, vib = vals
+    def apply(self, dev, values, mult=(1.0, 1.0, 1.0)):
+        gamma, contrast, brightness, vib = values
         neutral = (abs(gamma - NEUTRAL_GAMMA) < 0.005 and contrast == 50 and brightness == 50
                    and tuple(mult) == (1.0, 1.0, 1.0))
-        ok = reset_icc(dev) if neutral else apply_icc(dev, gamma, contrast, brightness, mult)
+        applied = reset_icc(dev) if neutral else apply_icc(dev, gamma, contrast, brightness, mult)
         if self.has_nvibrant:
             self.vib[dev] = pct_to_raw(vib)
             idx = vibrance_index()
             if dev in idx:
                 raw = [0] * 8
-                for out, v in self.vib.items():
+                for out, level in self.vib.items():
                     if out in idx and 0 <= idx[out] < 8:
-                        raw[idx[out]] = v
-                r = run("nvibrant", *map(str, raw))
-                ok = ok and bool(r and r.returncode == 0)
-        return ok
+                        raw[idx[out]] = level
+                result = run("nvibrant", *map(str, raw))
+                applied = applied and bool(result and result.returncode == 0)
+        return applied
 
     def drifted(self, dev, vals, mult=(1.0, 1.0, 1.0)):
         return None             # a KWin megtartja az ICC-profilt; a kscreen-doctor 2 másodpercenkénti hívása túl nehéz lenne
 
 
-def overlay_style(w):
+def overlay_style(window):
     """Waylanden a tk-ablak nem lehet átkattintható/legfelső; amit lehet, megtesszük."""
-    w.attributes("-topmost", True)
+    window.attributes("-topmost", True)
 
 
 # ---------------------------------------------------------------- energiaprofil (power-profiles-daemon)
@@ -269,25 +269,25 @@ def parse_power_profiles(text):
     """A `powerprofilesctl list` kimenetéből [(név, név, aktív)]."""
     res = []
     for line in text.splitlines():
-        m = re.match(r"^([* ]) ([A-Za-z][\w-]*):\s*$", line)
-        if m:
-            res.append((m.group(2), m.group(2), m.group(1) == "*"))
+        match = re.match(r"^([* ]) ([A-Za-z][\w-]*):\s*$", line)
+        if match:
+            res.append((match.group(2), match.group(2), match.group(1) == "*"))
     return res
 
 
 def power_plans():
-    r = run("powerprofilesctl", "list")
-    return parse_power_profiles(r.stdout) if r and r.returncode == 0 else []
+    result = run("powerprofilesctl", "list")
+    return parse_power_profiles(result.stdout) if result and result.returncode == 0 else []
 
 
 def power_active():
-    r = run("powerprofilesctl", "get")
-    return r.stdout.strip() if r and r.returncode == 0 and r.stdout.strip() else None
+    result = run("powerprofilesctl", "get")
+    return result.stdout.strip() if result and result.returncode == 0 and result.stdout.strip() else None
 
 
 def power_set(name):
-    r = run("powerprofilesctl", "set", name)
-    return bool(r and r.returncode == 0)
+    result = run("powerprofilesctl", "set", name)
+    return bool(result and result.returncode == 0)
 
 
 # ---------------------------------------------------------------- gyorsgombok, rendszeresemények
@@ -319,10 +319,10 @@ class SystemEvents(threading.Thread):
             self.error = "nincs gdbus"
             return
         try:
-            p = subprocess.Popen(["gdbus", "monitor", "--system", "--dest", "org.freedesktop.login1"],
+            process = subprocess.Popen(["gdbus", "monitor", "--system", "--dest", "org.freedesktop.login1"],
                                  stdout=subprocess.PIPE, text=True)
-            for line in p.stdout:
+            for line in process.stdout:
                 if "PrepareForSleep" in line and "false" in line:
                     self.cb("resume")
-        except Exception as e:                           # noqa: BLE001
-            self.error = e
+        except Exception as error:                           # noqa: BLE001
+            self.error = error

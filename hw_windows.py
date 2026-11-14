@@ -31,27 +31,27 @@ class DISPLAY_DEVICE(ctypes.Structure):
 
 def list_monitors():
     """A csatlakoztatott monitorok: [{"id": "SAM777F", "dev": r"\\\\.\\DISPLAY2"}]."""
-    out, i = [], 0
+    out, index = [], 0
     while True:
-        a = DISPLAY_DEVICE()
-        a.cb = ctypes.sizeof(a)
-        if not user32.EnumDisplayDevicesW(None, i, ctypes.byref(a), 0):
+        adapter = DISPLAY_DEVICE()
+        adapter.cb = ctypes.sizeof(adapter)
+        if not user32.EnumDisplayDevicesW(None, index, ctypes.byref(adapter), 0):
             break
-        i += 1
-        if not (a.StateFlags & 1):                     # nincs az asztalhoz csatolva
+        index += 1
+        if not (adapter.StateFlags & 1):                     # nincs az asztalhoz csatolva
             continue
-        m = DISPLAY_DEVICE()
-        m.cb = ctypes.sizeof(m)
-        if user32.EnumDisplayDevicesW(a.DeviceName, 0, ctypes.byref(m), 0):
-            parts = m.DeviceID.split("\\")
-            out.append({"id": parts[1] if len(parts) > 1 else m.DeviceID, "dev": a.DeviceName})
+        monitor = DISPLAY_DEVICE()
+        monitor.cb = ctypes.sizeof(monitor)
+        if user32.EnumDisplayDevicesW(adapter.DeviceName, 0, ctypes.byref(monitor), 0):
+            parts = monitor.DeviceID.split("\\")
+            out.append({"id": parts[1] if len(parts) > 1 else monitor.DeviceID, "dev": adapter.DeviceName})
     return out
 
 
 def find_dev(mid):
-    for m in list_monitors():
-        if m["id"].lower() == mid.lower():
-            return m["dev"]
+    for monitor in list_monitors():
+        if monitor["id"].lower() == mid.lower():
+            return monitor["dev"]
     return None
 
 
@@ -74,12 +74,12 @@ def monitor_rect(mid):
     dev = find_dev(mid) if mid else None
     found = []
 
-    def cb(hm, hdc, rect, data):
-        mi = _MONITORINFOEX()
-        mi.cbSize = ctypes.sizeof(mi)
-        if user32.GetMonitorInfoW(hm, ctypes.byref(mi)) and dev and mi.szDevice.lower() == dev.lower():
-            r = mi.rcMonitor
-            found.append((r.left, r.top, r.right, r.bottom))
+    def cb(monitor_handle, hdc, rect, data):
+        info = _MONITORINFOEX()
+        info.cbSize = ctypes.sizeof(info)
+        if user32.GetMonitorInfoW(monitor_handle, ctypes.byref(info)) and dev and info.szDevice.lower() == dev.lower():
+            bounds = info.rcMonitor
+            found.append((bounds.left, bounds.top, bounds.right, bounds.bottom))
         return 1
 
     proc = _MONENUMPROC(cb)                                  # a hívás idejére életben kell tartani
@@ -97,50 +97,50 @@ def foreground_monitor_id():
     hmon = user32.MonitorFromWindow(hwnd, 2) if hwnd else None          # 2 = a legközelebbi monitor
     if not hmon:
         return None
-    mi = _MONITORINFOEX()
-    mi.cbSize = ctypes.sizeof(mi)
-    if not user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+    info = _MONITORINFOEX()
+    info.cbSize = ctypes.sizeof(info)
+    if not user32.GetMonitorInfoW(hmon, ctypes.byref(info)):
         return None
-    return next((m["id"] for m in list_monitors() if m["dev"].lower() == mi.szDevice.lower()), None)
+    return next((monitor["id"] for monitor in list_monitors() if monitor["dev"].lower() == info.szDevice.lower()), None)
 
 
-def _clamp(v):
-    return 0.0 if v < 0 else (1.0 if v > 1 else v)
+def _clamp(value):
+    return 0.0 if value < 0 else (1.0 if value > 1 else value)
 
 
 def build_ramp(gamma, contrast, brightness, mult=(1.0, 1.0, 1.0)):
     """d(be) = clip((be^(2,2/gamma) - 0,5) * k + 0,5 + b), k = 2^((kontraszt-50)/50), b = (fényerő-50)/50*0,25.
     A mult az R/G/B csatorna szorzója (éjszakai mód). A Windows nem fogad el a lineárishoz képest túl
     távoli görbét, ezért az értékeket +-32000-re szorítjuk."""
-    k, b, e = 2 ** ((contrast - 50) / 50), (brightness - 50) / 50 * 0.25, 2.2 / gamma
+    contrast_factor, brightness_offset, exponent = 2 ** ((contrast - 50) / 50), (brightness - 50) / 50 * 0.25, 2.2 / gamma
     arr = (ctypes.c_ushort * 768)()
-    for ch in range(3):
-        for i in range(256):
-            d = _clamp((((i / 255.0) ** e) - 0.5) * k + 0.5 + b) * mult[ch]
-            ident = i * 257
-            arr[ch * 256 + i] = int(max(0, min(65535, max(ident - 32000, min(ident + 32000, round(d * 65535))))))
+    for channel in range(3):
+        for step in range(256):
+            level = _clamp((((step / 255.0) ** exponent) - 0.5) * contrast_factor + 0.5 + brightness_offset) * mult[channel]
+            ident = step * 257
+            arr[channel * 256 + step] = int(max(0, min(65535, max(ident - 32000, min(ident + 32000, round(level * 65535))))))
     return arr
 
 
 def set_ramp(dev, ramp):
-    dc = gdi32.CreateDCW(None, dev, None, None)
-    if not dc:
+    device_context = gdi32.CreateDCW(None, dev, None, None)
+    if not device_context:
         return False
     try:
-        return bool(gdi32.SetDeviceGammaRamp(dc, ctypes.byref(ramp)))
+        return bool(gdi32.SetDeviceGammaRamp(device_context, ctypes.byref(ramp)))
     finally:
-        gdi32.DeleteDC(dc)
+        gdi32.DeleteDC(device_context)
 
 
 def get_ramp(dev):
-    dc = gdi32.CreateDCW(None, dev, None, None)
-    if not dc:
+    device_context = gdi32.CreateDCW(None, dev, None, None)
+    if not device_context:
         return None
     try:
         arr = (ctypes.c_ushort * 768)()
-        return arr if gdi32.GetDeviceGammaRamp(dc, ctypes.byref(arr)) else None
+        return arr if gdi32.GetDeviceGammaRamp(device_context, ctypes.byref(arr)) else None
     finally:
-        gdi32.DeleteDC(dc)
+        gdi32.DeleteDC(device_context)
 
 
 class _DVC(ctypes.Structure):
@@ -154,9 +154,9 @@ class Nv:
     def __init__(self):
         self.ok = False
         try:
-            q = ctypes.WinDLL("nvapi64.dll").nvapi_QueryInterface
-            q.restype, q.argtypes = ctypes.c_void_p, [ctypes.c_uint]
-            self._q = q
+            query_interface = ctypes.WinDLL("nvapi64.dll").nvapi_QueryInterface
+            query_interface.restype, query_interface.argtypes = ctypes.c_void_p, [ctypes.c_uint]
+            self._q = query_interface
             init = self._fn(0x0150E828, ctypes.c_int)
             self.ok = bool(init) and init() == 0
             if self.ok:
@@ -170,25 +170,25 @@ class Nv:
             self.ok = False
 
     def _fn(self, fid, restype, *argtypes):
-        p = self._q(fid)
-        return ctypes.CFUNCTYPE(restype, *argtypes)(p) if p else None
+        address = self._q(fid)
+        return ctypes.CFUNCTYPE(restype, *argtypes)(address) if address else None
 
     def _locate(self, dev):
-        for i in range(16):
-            h = ctypes.c_void_p()
-            if self._enum(i, ctypes.byref(h)) != 0:
+        for index in range(16):
+            handle = ctypes.c_void_p()
+            if self._enum(index, ctypes.byref(handle)) != 0:
                 break
             buf = ctypes.create_string_buffer(64)
-            self._name(h, buf)
+            self._name(handle, buf)
             if buf.value.decode("ascii", "ignore").lower() == dev.lower():
                 oid = ctypes.c_uint32()
-                return (h, oid.value) if self._oid(h, ctypes.byref(oid)) == 0 else None
+                return (handle, oid.value) if self._oid(handle, ctypes.byref(oid)) == 0 else None
         return None
 
     def _info(self):
-        d = _DVC()
-        d.version = ctypes.sizeof(_DVC) | (1 << 16)
-        return d
+        dvc_info = _DVC()
+        dvc_info.version = ctypes.sizeof(_DVC) | (1 << 16)
+        return dvc_info
 
     def get(self, dev):
         if not self.ok:
@@ -196,8 +196,8 @@ class Nv:
         loc = self._locate(dev)
         if not loc:
             return -1
-        d = self._info()
-        return d.cur if self._get(loc[0], loc[1], ctypes.byref(d)) == 0 else -1
+        dvc_info = self._info()
+        return dvc_info.cur if self._get(loc[0], loc[1], ctypes.byref(dvc_info)) == 0 else -1
 
     def set(self, dev, level):
         if not self.ok:
@@ -205,9 +205,9 @@ class Nv:
         loc = self._locate(dev)
         if not loc:
             return False
-        d = self._info()
-        d.cur, d.min, d.max, d.default = max(0, min(100, int(level))), 0, 100, 50
-        return self._set(loc[0], loc[1], ctypes.byref(d)) == 0
+        dvc_info = self._info()
+        dvc_info.cur, dvc_info.min, dvc_info.max, dvc_info.default = max(0, min(100, int(level))), 0, 100, 50
+        return self._set(loc[0], loc[1], ctypes.byref(dvc_info)) == 0
 
 
 # ---------------------------------------------------------------- energiaprofil, RGB
@@ -215,20 +215,20 @@ class Nv:
 def power_plans():
     """[(guid, név, aktív)] a powercfg kimenetéből."""
     try:
-        r = subprocess.run(["powercfg", "/list"], capture_output=True, text=True, encoding="oem", errors="replace",
+        result = subprocess.run(["powercfg", "/list"], capture_output=True, text=True, encoding="oem", errors="replace",
                            creationflags=CREATE_NO_WINDOW, timeout=15)
     except Exception:
         return []
     plans = []
-    for line in r.stdout.splitlines():
-        m = re.search(r"([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\s+\((.+?)\)\s*(\*)?", line)
-        if m:
-            plans.append((m.group(1).lower(), m.group(2), bool(m.group(3))))
+    for line in result.stdout.splitlines():
+        match = re.search(r"([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\s+\((.+?)\)\s*(\*)?", line)
+        if match:
+            plans.append((match.group(1).lower(), match.group(2), bool(match.group(3))))
     return plans
 
 
 def power_active():
-    return next((g for g, _, a in power_plans() if a), None)
+    return next((guid for guid, _, is_active in power_plans() if is_active), None)
 
 
 def power_set(guid):
@@ -262,21 +262,21 @@ class Hotkeys(threading.Thread):
         ids = {}
         while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
             if msg.message == WM_RELOAD:
-                for i in ids:
-                    user32.UnregisterHotKey(None, i)
+                for hotkey_id in ids:
+                    user32.UnregisterHotKey(None, hotkey_id)
                 ids.clear()
                 with self.lock:
                     wanted = dict(self.wanted)
                 failed = set()
-                for n, (action, spec) in enumerate(wanted.items(), 1):
+                for number, (action, spec) in enumerate(wanted.items(), 1):
                     if isinstance(spec, tuple):
-                        hk = spec
+                        hotkey = spec
                     else:
                         parsed = parse_hotkey(spec)
-                        hk = (parsed[0], parsed[1], False) if parsed else None
+                        hotkey = (parsed[0], parsed[1], False) if parsed else None
                     # MOD_NOREPEAT (0x4000): a nyomva tartott gomb csak egyszer hat, kivéve ahol az ismétlés a cél (csúszka)
-                    if hk and user32.RegisterHotKey(None, n, hk[0] | (0 if hk[2] else 0x4000), hk[1]):
-                        ids[n] = action
+                    if hotkey and user32.RegisterHotKey(None, number, hotkey[0] | (0 if hotkey[2] else 0x4000), hotkey[1]):
+                        ids[number] = action
                     else:
                         failed.add(action)
                 self.failed = failed
@@ -360,8 +360,8 @@ class SystemEvents(threading.Thread):
                 wts.WTSRegisterSessionNotification(self.hwnd, 0)                  # csak ebben a munkamenetben
             except OSError:
                 pass
-        except Exception as e:
-            self.error = e
+        except Exception as error:
+            self.error = error
             self.ready.set()
             return
         self.ready.set()
@@ -387,10 +387,10 @@ class Display:
         """(elérhető, indok): Windowson az NVAPI minden NVIDIA-s kijelzőre elérhető."""
         return (True, "") if self.nv.ok else (False, "Nincs NVIDIA driver.")
 
-    def apply(self, dev, vals, mult=(1.0, 1.0, 1.0)):
+    def apply(self, dev, values, mult=(1.0, 1.0, 1.0)):
         """vals = (gamma, kontraszt, fényerő, vibrance); mult = R/G/B szorzó. Igaz, ha sikerült."""
-        g, c, b, v = vals
-        return set_ramp(dev, build_ramp(g, c, b, mult)) and self.nv.set(dev, v)
+        gamma, contrast, brightness, vibrance = values
+        return set_ramp(dev, build_ramp(gamma, contrast, brightness, mult)) and self.nv.set(dev, vibrance)
 
     def drifted(self, dev, vals, mult=(1.0, 1.0, 1.0)):
         """Igaz, ha a kijelző állapota eltér a kívánttól (a játék/driver felülírta); None, ha nem olvasható."""
@@ -398,15 +398,15 @@ class Display:
         if not now:
             return None
         want = build_ramp(vals[0], vals[1], vals[2], mult)
-        bad = any(abs(now[ch * 256 + i] - want[ch * 256 + i]) > 8 for ch in range(3) for i in (64, 128, 192))
+        bad = any(abs(now[channel * 256 + position] - want[channel * 256 + position]) > 8 for channel in range(3) for position in (64, 128, 192))
         if not bad and self.nv.ok:
             bad = self.nv.get(dev) not in (-1, int(vals[3]))
         return bad
 
 
-def overlay_style(w):
+def overlay_style(window):
     """Átkattintható, nem aktiválódó, tálcagomb nélküli, legfelső ablak (a képernyő-értesítéshez); w: tk ablak."""
-    hwnd = user32.GetParent(w.winfo_id()) or w.winfo_id()
-    ex = user32.GetWindowLongW(hwnd, -20)
-    user32.SetWindowLongW(hwnd, -20, ex | 0x00080000 | 0x00000020 | 0x08000000 | 0x00000080)
+    hwnd = user32.GetParent(window.winfo_id()) or window.winfo_id()
+    ex_style = user32.GetWindowLongW(hwnd, -20)
+    user32.SetWindowLongW(hwnd, -20, ex_style | 0x00080000 | 0x00000020 | 0x08000000 | 0x00000080)
     user32.SetWindowPos(hwnd, ctypes.c_void_p(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | 0x0040)   # TOPMOST, aktiválás nélkül
