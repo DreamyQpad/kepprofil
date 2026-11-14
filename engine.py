@@ -7,6 +7,12 @@ from consts import CONFIG_FILE, NEUTRAL, SETTINGS_FILE
 from hw import Display, Rgb, find_dev, list_monitors, power_active, power_set
 
 
+def norm_proc(name):
+    """A folyamatnév összehasonlítható alakja: kisbetűs, `.exe` nélkül; üres/None -> üres."""
+    n = (name or "").lower()
+    return n[:-4] if n.endswith(".exe") else n
+
+
 class Engine:
     def __init__(self, notify=lambda: None):
         self.lock = threading.RLock()
@@ -26,8 +32,12 @@ class Engine:
         self.night_mons = set()     # azok a monitorok (azonosító), ahol az éjszakai mód be van kapcsolva
         self.panel_open = False
         self.hold = False           # összehasonlítás: nyomva tartva a semleges kép látszik
-        self.running = set()
+        self.proc_counts = {}       # normalizált név -> futó példányok száma (esemény- és lekérdezéses módban is ez a forrás)
+        self.running = set()        # a proc_counts pozitív kulcsai
         self.running_t = 0.0
+        self.event_mode = False     # igaz: a folyamat-eseményfigyelő él, a gyorsítótár nem avul el (nincs 6 mp-es újraolvasás)
+        self.watch_wake = threading.Event()     # figyelt nevű folyamat indult/kilépett: a figyelő azonnal fusson
+        self.run_lock = threading.Lock()
         self.log = []
         self.fx_lock = threading.Lock()
         self.fx_wake = threading.Event()
@@ -107,19 +117,48 @@ class Engine:
 
     def refresh_running(self):
         import psutil
-        names = set()
-        for p in psutil.process_iter(["name"]):
-            n = (p.info.get("name") or "").lower()
-            names.add(n[:-4] if n.endswith(".exe") else n)
-        self.running, self.running_t = names, time.time()
+        self.set_running(p.info.get("name") for p in psutil.process_iter(["name"]))
+
+    def set_running(self, raw_names):
+        """A névszámlálót a nyers folyamatnevekből újraépíti (teljes pillanatkép)."""
+        counts = {}
+        for raw in raw_names:
+            n = norm_proc(raw)
+            if n:
+                counts[n] = counts.get(n, 0) + 1
+        with self.run_lock:
+            self.proc_counts = counts
+            self.running = set(counts)
+            self.running_t = time.time()
+
+    def proc_event(self, started, name):
+        """Egy folyamat indulása/kilépése: a névszámlálót +1/-1 módosítja (nulla alá nem megy). Ha a név figyelt
+        (valamelyik preset folyamata), felébreszti a figyelőt. A példányszám azért kell, mert több azonos nevű
+        folyamat is futhat, és az egyik kilépése nem jelenti a játék végét."""
+        n = norm_proc(name)
+        if not n:
+            return
+        with self.run_lock:
+            c = self.proc_counts.get(n, 0) + (1 if started else -1)
+            if c > 0:
+                self.proc_counts[n] = c
+            else:
+                self.proc_counts.pop(n, None)
+            self.running = set(self.proc_counts)
+        if n in self.watched_names():
+            self.watch_wake.set()
+
+    def watched_names(self):
+        """Az összes monitor összes presetjének normalizált folyamatneve (üres nélkül)."""
+        with self.lock:
+            return {norm_proc(p.get("process")) for m in self.cfg["monitors"] for p in m["presets"].values()} - {""}
 
     def proc_running(self, proc):
         if not proc:
             return False
-        if time.time() - self.running_t > 6:
+        if not self.event_mode and time.time() - self.running_t > 6:
             self.refresh_running()
-        p = proc.lower()
-        return (p[:-4] if p.endswith(".exe") else p) in self.running
+        return norm_proc(proc) in self.running
 
     # -- mit kell látni
     def target(self, mid):
