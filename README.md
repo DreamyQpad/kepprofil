@@ -6,7 +6,7 @@ kilépéskor visszaáll az alaphelyzet. Kézzel is váltható tálcamenüből va
 
 Eredetileg két, kézzel összerakott szkriptből (Linuxos KDE-panel, majd PowerShell-es változat) nőtt egy közös programmá.
 
-**Állapot (v2.10):** Windows 11-en és Linuxon (KDE Plasma Wayland) is használatra kész; a Linuxos változat valódi gépen
+**Állapot (v2.11):** Windows 11-en és Linuxon (KDE Plasma Wayland) is használatra kész; a Linuxos változat valódi gépen
 tesztelve, működik – lásd [LINUX.md](LINUX.md).
 
 ## Mit tud
