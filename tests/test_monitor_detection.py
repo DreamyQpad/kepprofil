@@ -53,7 +53,7 @@ class MonitorDetectionTest(unittest.TestCase):
         cfg = two_monitors()
         cfg["monitors"][1]["presets"]["Játék"]["hotkey"] = "ctrl+alt+2"
         eng, _ = make_engine(self, cfg, plugged=["MON1"], active=None)
-        self.assertEqual(list(eng.hotkey_map().values()), ["ctrl+alt+1"])
+        self.assertEqual([hotkey for key, hotkey in eng.hotkey_map().items() if key.startswith("p|")], ["ctrl+alt+1"])
 
     def test_a_figyelo_nem_kapcsol_be_presetet_lecsatlakoztatott_monitoron(self):
         eng, display = make_engine(self, two_monitors(), plugged=["MON1"], active=None)

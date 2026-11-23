@@ -3,6 +3,7 @@ követése, mentés, kapcsolók és beállítások. Az elrendezést a `gui_layou
 `gui_preset_dialogs` adja; a motort, a gyorsgombokat, a tálcát és az üzenetsort az `app` (gui.App) adja."""
 import json
 import re
+import sys
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -21,7 +22,7 @@ from system import autostart_enabled, open_native, set_autostart
 
 IMAGE_SLIDERS = ("gamma", "contrast", "brightness", "vibrance")      # a preset értékeinek sorrendje
 GAIN_SLIDERS = ("red_gain", "green_gain", "blue_gain")
-LABELLED_SLIDERS = IMAGE_SLIDERS + GAIN_SLIDERS + ("night_strength",)
+LABELLED_SLIDERS = IMAGE_SLIDERS + GAIN_SLIDERS + ("night_strength",) + (("map_alpha",) if sys.platform == "win32" else ())
 GAMMA_SCALE = 2.2                  # a gamma-csúszka az NVIDIA-panel skáláján megy (1,00 = semleges); a mentett érték a régi
                                    # (2,2 = semleges), így a meglévő presetek nem változnak: belső érték = csúszka * 2,2
 NEUTRAL_GAINS = [100, 100, 100]
@@ -64,6 +65,8 @@ class Panel:
         """Az ablak feltöltése a mentett beállításokkal; az első monitor és preset betöltése."""
         self.show_settings()
         self.widgets.night_strength.slider.configure(command=self.on_night_strength)
+        if hasattr(self.widgets, "map_alpha"):
+            self.widgets.map_alpha.slider.configure(command=self.on_map_alpha)
         self.pick_monitor(self.eng.mons()[0]["name"] if self.eng.mons() else "")
         self.poll_dirty()
 
@@ -136,6 +139,16 @@ class Panel:
         self.refresh_value_labels()
         self.eng.set_night_strength(value)
         self.eng.save_settings()
+
+    def on_map_alpha(self, value):
+        self.refresh_value_labels()
+        alpha = round(value / 100, 2)
+        self.set_setting("map_alpha", alpha)
+        if self.app.map:
+            self.app.map.set_alpha(alpha)
+
+    def toggle_map_auto(self):
+        self.set_setting("map_auto", bool(self.widgets.map_auto_switch.get()))
 
     def update_vibrance_state(self):
         """A vibrance-csúszka csak ott aktív, ahol hat; máshol szürke, az okkal."""
@@ -406,6 +419,13 @@ class Panel:
         widgets.overlay_hotkey.set(settings.get("overlay_hotkey", ""))
         widgets.base_rgb_picker.set(settings.get("base_rgb"))
         set_switch(widgets.toast_switch, settings.get("toast", True))
+        if hasattr(widgets, "map_hotkey"):
+            widgets.menu_hotkey.set(settings.get("menu_hotkey", ""))
+            widgets.map_hotkey.set(settings.get("map_hotkey", ""))
+            widgets.map_interact_hotkey.set(settings.get("map_interact_hotkey", ""))
+            set_switch(widgets.map_auto_switch, settings.get("map_auto", True))
+            widgets.map_alpha.slider.set(round(settings.get("map_alpha", 0.85) * 100))
+            self.refresh_value_labels()
 
     def reload_after_import(self):
         """Importálás után: minden mező és a gyorsgombok a betöltött adatokból."""

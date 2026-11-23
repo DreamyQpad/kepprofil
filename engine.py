@@ -384,6 +384,12 @@ class Engine:
             hotkeys["cycle"] = self.set["cycle_hotkey"]
         if self.set.get("overlay_hotkey"):
             hotkeys["overlay"] = self.set["overlay_hotkey"]
+        if self.set.get("menu_hotkey"):
+            hotkeys["menu"] = self.set["menu_hotkey"]
+        if self.set.get("map_hotkey"):
+            hotkeys["map"] = self.set["map_hotkey"]
+        if self.set.get("map_interact_hotkey"):
+            hotkeys["map_interact"] = self.set["map_interact_hotkey"]
         if self.set.get("night_hotkey"):
             hotkeys["night"] = self.set["night_hotkey"]
         if self.set.get("neutral_hotkey"):

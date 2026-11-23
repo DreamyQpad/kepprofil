@@ -16,7 +16,7 @@ RGB_MODES = {"Nem változtat": "none", "Kikapcsolva": "off", "Szín": "color", "
 MODIFIER_KEYSYMS = ("Control_L", "Control_R", "Alt_L", "Alt_R", "Shift_L", "Shift_R", "Win_L", "Win_R", "Caps_Lock")
 KEY_NAMES = {"Escape": "Esc", "space": "Space", "Insert": "Insert", "Delete": "Delete", "Home": "Home", "End": "End",
              "Prior": "PageUp", "Next": "PageDown", "Up": "Up", "Down": "Down", "Left": "Left", "Right": "Right",
-             "Pause": "Pause"}
+             "Pause": "Pause", "Tab": "Tab", "ISO_Left_Tab": "Tab"}
 CTRL_MASK, ALT_MASK, SHIFT_MASK = 0x4, 0x20000, 0x1                   # a Tk `event.state` módosító-bitjei
 
 

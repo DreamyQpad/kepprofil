@@ -7,9 +7,13 @@ import threading
 import traceback
 
 from config import auto_backup, write_log
-from consts import APP_NAME, RES_DIR, VERSION
+from consts import APP_NAME, BASE_PRESET_NAME, RES_DIR, VERSION
 from engine import Engine
+from hotkey_layers import HotkeyLayers
 from hw import Hotkeys, SystemEvents, foreground_monitor_id, monitor_rect, power_plans
+from browser_overlay import BrowserController
+from map_overlay import MapController, MapFeed
+from menu_overlay import MenuController
 from overlay import OverlayController
 from system import (ensure_launcher, kill_old_watcher, show_signaled, signal_running, single_instance,
                     start_process_events)
@@ -17,6 +21,7 @@ from system import (ensure_launcher, kill_old_watcher, show_signaled, signal_run
 HOOK = {}                                         # tesztek: a futó felület elemei (run_app tölti fel)
 PUMP_INTERVAL_MS = 100                            # az üzenetsor ürítésének gyakorisága
 OVERLAY_TICK_MS = 500
+MAP_TICK_MS = 1000                                         # a Tarkov-log és a térképfolyamat ellenőrzésének gyakorisága
 WINDOW_SIZE = "620x920"
 WINDOW_MIN_SIZE = (580, 760)
 ICON_LOAD_DELAY_MS = 300                          # az ablak ikonját a megjelenés után tölti be (korábban nem fogja meg)
@@ -52,15 +57,24 @@ class App:
         self.eng.say(f"Indul: {APP_NAME} {VERSION}")
         self.hotkeys = Hotkeys(lambda action: self.post(("hk", action)))
         self.hotkeys.start()
+        self.hotkey_layers = HotkeyLayers(self.eng.hotkey_map, self.hotkeys.set)
         self.system_events = SystemEvents(self.eng.system_event)         # ébredés / kijelzőváltás után a kép visszaállítása
         self.system_events.start()
         ctk.set_appearance_mode("system")
         ctk.set_default_color_theme("blue")
         self.root = self._create_window(ctk)
         self.overlay = OverlayController(
-            self.eng, self.root, set_hotkeys=self.hotkeys.set, foreground_mid=foreground_monitor_id,
+            self.eng, self.root, set_hotkeys=self.hotkey_layers.setter("overlay"), foreground_mid=foreground_monitor_id,
             rect_for=monitor_rect, hotkey_failed=lambda: self.hotkeys.failed,
-            main_visible=lambda: self.root.state() != "withdrawn")
+            main_visible=lambda: self.root.state() != "withdrawn", hide_main=self.hide_main_window)
+        self.map = MapController(self.eng, set_hotkeys=self.hotkey_layers.setter("map")) if sys.platform == "win32" else None
+        self.map_feed = MapFeed(self.map, self.eng) if self.map else None
+        self.browser = BrowserController(self.eng, game=self._active_game) if sys.platform == "win32" else None
+        self.menu = MenuController(
+            self.eng, self.root, set_hotkeys=self.hotkey_layers.setter("menu"), rect_for=monitor_rect,
+            foreground_mid=foreground_monitor_id, before_open=self._before_menu_open,
+            actions={"map": self.map.toggle, "browser": self.browser.toggle, "profile": self.overlay.toggle}
+        ) if sys.platform == "win32" else None
         self.toast = Toast(self.root, rect_for=monitor_rect)
         self.tray = Tray(self.eng, self.post)
         self.tray.start()
@@ -108,7 +122,7 @@ class App:
         self.queue.put(message)
 
     def apply_hotkeys(self):
-        self.hotkeys.set(self.eng.hotkey_map())
+        self.hotkey_layers.refresh()
 
     def refresh_tray(self):
         self.tray.refresh()
@@ -124,8 +138,9 @@ class App:
         self.apply_hotkeys()
         self.pump()
         self.overlay_tick()
+        self.map_tick()
         HOOK.update(root=self.root, eng=self.eng, panel=self.panel, toast=self.toast, overlay=self.overlay,
-                    hotkeys=self.hotkeys)          # csak az automatikus tesztek használják
+                    hotkeys=self.hotkeys, map=self.map, menu=self.menu, browser=self.browser)          # csak az automatikus tesztek használják
         if start_hidden:
             self.root.withdraw()
         else:
@@ -147,10 +162,18 @@ class App:
                     return
                 handler = self._handlers.get(kind)
                 if handler:
-                    handler(*arguments)
+                    self._run_handler(kind, handler, arguments)
         except queue.Empty:
             pass
         self.root.after(PUMP_INTERVAL_MS, self.pump)
+
+    def _run_handler(self, kind, handler, arguments):
+        """Egy üzenet kezelője; a hibája a naplóba kerül, és nem állítja le az üzenetsor ciklusát (különben a gyorsgombok, a
+        tálca és az értesítések az újraindításig némák maradnának)."""
+        try:
+            handler(*arguments)
+        except Exception as error:
+            self.eng.say(f"Hiba a(z) {kind} üzenet kezelésében: {error.__class__.__name__}: {error}")
 
     def overlay_tick(self):
         try:
@@ -159,8 +182,30 @@ class App:
             self.eng.say(f"Overlay hiba: {error.__class__.__name__}")
         self.root.after(OVERLAY_TICK_MS, self.overlay_tick)
 
+    def hide_main_window(self):
+        """A profil-overlay megnyitása előtt a főablak a tálcára megy (a kettő nem szerkeszthet egyszerre); mentetlen
+        módosítást nem dob el: ilyenkor False."""
+        if self.panel.is_dirty():
+            return False
+        self.panel.hide()
+        return True
+
+    def map_tick(self):
+        if self.map_feed is None:
+            return
+        try:
+            self.map_feed.tick()
+            self.browser.check()
+        except Exception as error:
+            self.eng.say(f"Térkép hiba: {error.__class__.__name__}")
+        self.root.after(MAP_TICK_MS, self.map_tick)
+
     def quit(self):
         self.overlay.close()
+        if self.map:
+            self.map.stop()
+        if self.browser:
+            self.browser.stop()
         self.eng.shutdown()
         self.tray.stop()
         self.root.destroy()
@@ -174,9 +219,47 @@ class App:
     def _toggle_night(self, monitor_id=None):
         self.eng.toggle_night(monitor_id)
 
+    def _active_game(self):
+        """A böngésző könyvjelzősávjának játék-azonosítója: az előtérben lévő monitor aktív presetjének neve; az Alap preset
+        vagy az aktív preset hiánya a közös (üres) azonosító."""
+        target = self.eng.overlay_target(foreground_monitor_id())
+        name = target[1] if target else ""
+        return "" if name == BASE_PRESET_NAME else name
+
+    def _before_menu_open(self):
+        """A menü nyitása előtt a másik két overlay lefoglalt gombjai felszabadulnak (a menü ugyanazokat a nyilakat kéri)."""
+        if self.map:
+            self.map.leave_keys()
+        self.overlay.close()
+
+    def _close_menu(self):
+        if self.menu and self.menu.is_open:
+            self.menu.close()
+
     def _run_hotkey_action(self, action):
-        if action == "overlay":
+        if action == "menu":
+            if self.menu:
+                self.menu.toggle()
+        elif action.startswith("mn|"):
+            if self.menu:
+                self.menu.key(action)
+        elif action == "overlay":
+            self._close_menu()
+            if self.map:
+                self.map.leave_keys()                         # a profil-overlay ugyanazokat a nyilakat foglalja le
             self.overlay.toggle()
+        elif action in ("map", "map_interact") or action.startswith("mp|"):
+            if self.map:
+                if action == "map":
+                    self._close_menu()
+                    self.map.toggle()
+                elif action == "map_interact":
+                    self._close_menu()
+                    if self.overlay.is_open:                      # a billentyűzetes mód és a profil-overlay ugyanazokat a gombokat kéri
+                        self.overlay.close()
+                    self.map.cycle_mode()
+                else:
+                    self.map.key(action)
         elif action.startswith("ov|"):
             self.overlay.key(action)
         else:

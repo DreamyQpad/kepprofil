@@ -15,6 +15,7 @@ try:
     import customtkinter as ctk
     import tkinter
     import gui
+    import map_overlay
     import gui_panel
     import gui_preset_dialogs
     import gui_tray
@@ -86,7 +87,7 @@ class GuiSmokeTest(unittest.TestCase):
                 (gui, "kill_old_watcher", lambda: None), (gui, "Hotkeys", FakeHotkeys),
                 (gui, "SystemEvents", FakeSystemEvents), (gui, "power_plans", lambda: [("g1", "Nagy teljesítmény", "x")]),
                 (gui_panel, "find_dev", lambda mid: "DEV_" + mid), (gui, "monitor_rect", lambda mid: None),
-                (gui, "foreground_monitor_id", lambda: None), (gui_tray, "start_tray", lambda icon: None),
+                (gui, "foreground_monitor_id", lambda: None), (map_overlay, "tarkov_install_dir", lambda setting="": None), (gui_tray, "start_tray", lambda icon: None),
                 (gui, "show_signaled", lambda *a: time.sleep(0.05)), (gui_preset_dialogs, "BACKUP_DIR", self.tmp),
                 (ctk, "CTkInputDialog", FakeDialog),
                 (messagebox, "askyesno", lambda *a, **k: self.confirm)]:
@@ -125,6 +126,81 @@ class GuiSmokeTest(unittest.TestCase):
 
     def status(self, H):
         return H["panel"].widgets.status_label.cget("text")
+
+    @unittest.skipUnless(sys.platform == "win32", "a térkép-overlay csak Windowson érhető el")
+    def test_program_fulen_a_terkep_mezok_es_a_beallitasok_mentese(self):
+        self.eng.set["map_alpha"] = 0.7
+
+        def sc(root, H):
+            panel, widgets = H["panel"], H["panel"].widgets
+            for name in ("menu_hotkey", "map_hotkey", "map_interact_hotkey", "map_auto_switch", "map_alpha"):
+                self.assertTrue(hasattr(widgets, name), name)
+            self.assertIsNotNone(H["map"])
+            self.assertIsNotNone(H["menu"])
+            self.assertIsNotNone(H["browser"])
+            self.assertEqual(widgets.menu_hotkey.get(), "Shift+Tab")     # az alapérték a mezőbe töltődik
+            panel.set_setting("menu_hotkey", "Ctrl+Alt+K")
+            self.assertEqual(H["hotkeys"].map["menu"], "Ctrl+Alt+K")
+            self.assertEqual(round(widgets.map_alpha.slider.get()), 70)
+            panel.set_setting("map_hotkey", "Ctrl+Alt+M")
+            self.assertEqual(H["hotkeys"].map["map"], "Ctrl+Alt+M")
+            panel.on_map_alpha(60)
+            self.assertEqual(self.eng.set["map_alpha"], 0.6)
+            widgets.map_auto_switch.deselect()
+            panel.toggle_map_auto()
+            self.assertIs(self.eng.set["map_auto"], False)
+        self.run_scenario(sc)
+
+    @unittest.skipUnless(sys.platform == "win32", "a térkép-overlay csak Windowson érhető el")
+    def test_a_terkep_atlatszosag_csuszkaja_a_futo_folyamatnak_kuldi_az_erteket(self):
+        def sc(root, H):
+            sent = []
+            H["map"].set_alpha = sent.append
+            slider = H["panel"].widgets.map_alpha.slider
+            slider.configure(command=slider.cget("command"))      # a valódi, a start()-ban bekötött parancs
+            slider.cget("command")(60)
+            self.assertEqual(sent, [0.6])
+            self.assertEqual(self.eng.set["map_alpha"], 0.6)
+        self.run_scenario(sc)
+
+    def test_minden_ful_gorgetheto_hogy_kis_ablaknal_se_vagodjon_le_a_tartalom(self):
+        """Fülenként a legalsó és a legfelső elemek is görgethető keretben vannak."""
+        def sc(root, H):
+            widgets = H["panel"].widgets
+            names = {"Kép": ("variant_menu", "compare_button"), "Színek": ("red_gain", "blue_gain"),
+                     "Játék és profil": ("process_entry",), "Éjszakai mód": ("night_switch", "night_hotkey"),
+                     "Program": ("autostart_switch", "cycle_hotkey", "info_label")}
+            for tab, widget_names in names.items():
+                for name in widget_names:
+                    widget = getattr(widgets, name)
+                    widget = getattr(widget, "slider", widget)
+                    ancestor, scrollable = widget, False
+                    while ancestor is not None:
+                        scrollable = scrollable or isinstance(ancestor, ctk.CTkScrollableFrame)
+                        ancestor = getattr(ancestor, "master", None)
+                    self.assertTrue(scrollable, f"{tab}: {name} nincs görgethető keretben")
+        self.run_scenario(sc)
+
+    @unittest.skipUnless(sys.platform == "win32", "a térkép-overlay csak Windowson érhető el")
+    def test_az_atlatszosag_csuszka_legorgetes_utan_a_lathato_teruleten_van(self):
+        def sc(root, H):
+            widgets = H["panel"].widgets
+            root.deiconify()                                     # tálcás indításnál az ablak rejtett: a méretezéshez meg kell jelennie
+            root.geometry("620x920+0+0")
+            widgets.tabs.set("Program")
+            root.update()
+            slider = widgets.map_alpha.slider
+            body = slider.master
+            while not isinstance(body, ctk.CTkScrollableFrame):
+                body = body.master
+            canvas = body._parent_canvas
+            canvas.yview_moveto(1.0)
+            root.update()
+            top = slider.winfo_rooty()
+            self.assertGreaterEqual(top, canvas.winfo_rooty(), "a csúszka a látható terület fölött van")
+            self.assertLessEqual(top + slider.winfo_height(), canvas.winfo_rooty() + canvas.winfo_height(),
+                                 "a csúszka a látható terület alatt van")
+        self.run_scenario(sc)
 
     def test_indulas_a_bekapcsolt_presetet_tolti(self):
         def sc(root, H):

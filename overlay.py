@@ -83,7 +83,14 @@ class OverlayModel:
 
 
 BACKGROUND, FOREGROUND, DIM, ACCENT, WARN = "#14161a", "#ffffff", "#8a93a0", "#7fb2ff", "#ffb454"
-WIDTH, MARGIN, ALPHA = 340, 24, 0.92
+WIDTH, ALPHA = 340, 0.92
+
+
+def centered_position(rect, width, height):
+    """Az ablak bal felső sarka (x, y), hogy a monitor (bal, felső, jobb, alsó) közepére kerüljön; a monitornál nagyobb ablak
+    a monitor bal felső sarkához igazodik."""
+    left, top, right, bottom = rect
+    return left + max(0, (right - left - width) // 2), top + max(0, (bottom - top - height) // 2)
 HINT = "↑↓ sor · ←→ állít (Shift ×5) · Del alap\nEnter mentés · N új változat · Esc elvet"
 
 
@@ -139,8 +146,8 @@ class OverlayView:
         self.update(model, warning)
         window.update_idletasks()
         window_height = window.winfo_reqheight()
-        left, top, right, bottom = rect
-        window.geometry(f"{WIDTH}x{window_height}+{right - WIDTH - MARGIN}+{top + max(0, (bottom - top - window_height) // 2)}")
+        left, top = centered_position(rect, WIDTH, window_height)
+        window.geometry(f"{WIDTH}x{window_height}+{left}+{top}")
         window.deiconify()
         window.update_idletasks()
         try:                                                  # átkattintható, nem aktiválódik, nincs tálcagomb
@@ -188,12 +195,13 @@ class OverlayController:
     """Az overlay nyitása/zárása és billentyűkezelése. A billentyűk csak nyitva tartás alatt vannak lefoglalva; a lefoglalást,
     az ablakokat és a környezetet kívülről kapja, így ablak nélkül is tesztelhető.
     set_hotkeys(mapping): a teljes gyorsgomb-térkép cseréje; foreground_mid(): az előtérbeli ablak monitorja vagy None;
-    rect_for(mid): a monitor téglalapja vagy None; hotkey_failed(): a nem lefoglalható műveletek; main_visible(): látszik-e a főablak."""
+    rect_for(mid): a monitor téglalapja vagy None; hotkey_failed(): a nem lefoglalható műveletek; main_visible(): látszik-e a főablak;
+    hide_main(): elrejti a főablakot, és True, ha sikerült (mentetlen módosításnál False)."""
 
-    def __init__(self, eng, root, set_hotkeys, foreground_mid, rect_for, hotkey_failed, main_visible, view=None):
+    def __init__(self, eng, root, set_hotkeys, foreground_mid, rect_for, hotkey_failed, main_visible, hide_main=lambda: False, view=None):
         self.eng, self.root = eng, root
         self.set_hotkeys, self.foreground_mid, self.rect_for = set_hotkeys, foreground_mid, rect_for
-        self.hotkey_failed, self.main_visible = hotkey_failed, main_visible
+        self.hotkey_failed, self.main_visible, self.hide_main = hotkey_failed, main_visible, hide_main
         self.view = view or OverlayView(root)
         self.model = None
         self._job = None
@@ -209,7 +217,8 @@ class OverlayController:
             self._open()
 
     def _open(self):
-        if self.main_visible():
+        if self.main_visible() and not self.hide_main():
+            self.eng.toast("Mentetlen módosítás a főablakban: mentsd vagy dobd el")
             return
         target = self.eng.overlay_target(self.foreground_mid())
         if target is None:

@@ -62,13 +62,17 @@ class View(unittest.TestCase):
         for flag, name in ((0x08000000, "NOACTIVATE"), (0x8, "TOPMOST"), (0x80, "TOOLWINDOW"), (0x20, "TRANSPARENT")):
             self.assertTrue(ex & flag, name)
 
-    def test_window_is_inside_rect_on_the_right_side(self):
+    def test_window_is_centered_in_rect(self):
         self.view.show(RECT, self.model)
         pump(self.root)
         w = self.view.window
-        self.assertGreater(w.winfo_rootx(), RECT[2] // 2)
-        self.assertLessEqual(w.winfo_rootx() + w.winfo_width(), RECT[2])
-        self.assertTrue(RECT[1] <= w.winfo_rooty() and w.winfo_rooty() + w.winfo_height() <= RECT[3])
+        left_gap = w.winfo_rootx() - RECT[0]
+        right_gap = RECT[2] - (w.winfo_rootx() + w.winfo_width())
+        top_gap = w.winfo_rooty() - RECT[1]
+        bottom_gap = RECT[3] - (w.winfo_rooty() + w.winfo_height())
+        self.assertLessEqual(abs(left_gap - right_gap), 1)
+        self.assertLessEqual(abs(top_gap - bottom_gap), 1)
+        self.assertGreaterEqual(min(left_gap, top_gap), 0)
 
     def test_update_shows_selected_row_and_values(self):
         self.view.show(RECT, self.model)
@@ -105,6 +109,20 @@ class View(unittest.TestCase):
         self.view.close()
         self.assertFalse(self.view.is_open)
         self.assertIsNone(self.view.hwnd)
+
+
+class CenteredPositionTest(unittest.TestCase):
+    def test_a_monitor_kozepere_kerul(self):
+        from overlay import centered_position
+        self.assertEqual(centered_position((0, 0, 1920, 1080), 340, 400), (790, 340))
+
+    def test_masodik_monitoron_az_eltolast_figyelembe_veszi(self):
+        from overlay import centered_position
+        self.assertEqual(centered_position((1920, 0, 4480, 1440), 340, 400), (1920 + 1110, 520))
+
+    def test_a_monitornal_nagyobb_ablak_nem_log_ki_balra_felfele(self):
+        from overlay import centered_position
+        self.assertEqual(centered_position((100, 50, 300, 250), 500, 600), (100, 50))
 
 
 if __name__ == "__main__":

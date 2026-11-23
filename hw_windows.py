@@ -410,3 +410,80 @@ def overlay_style(window):
     ex_style = user32.GetWindowLongW(hwnd, -20)
     user32.SetWindowLongW(hwnd, -20, ex_style | 0x00080000 | 0x00000020 | 0x08000000 | 0x00000080)
     user32.SetWindowPos(hwnd, ctypes.c_void_p(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | 0x0040)   # TOPMOST, aktiválás nélkül
+
+
+def menu_style(window):
+    """Kattintható, de nem aktiválódó, tálcagomb nélküli, legfelső ablak (a főmenühöz); a fókusz a játéknál marad. Az ablakot
+    nem jeleníti meg (nincs SWP_SHOWWINDOW): a megjelenítés és a helyre tétel a tk dolga, különben az ablak a bal felső sarokban
+    maradna."""
+    hwnd = user32.GetParent(window.winfo_id()) or window.winfo_id()
+    ex_style = user32.GetWindowLongW(hwnd, -20)
+    user32.SetWindowLongW(hwnd, -20, ex_style | 0x08000000 | 0x00000080)            # NOACTIVATE | TOOLWINDOW
+    user32.SetWindowPos(hwnd, ctypes.c_void_p(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | 0x0020)   # TOPMOST, NOSIZE|NOMOVE|NOACTIVATE|FRAMECHANGED
+
+
+class MapWindowApi:
+    """A térképablak Win32-rétege (a `map_window.WindowModes` `win32` paramétere); az ablakot a címe alapján találja meg.
+    Pillantás és billentyűzetes mód: rétegezett, átkattintható, nem aktiválódó, keret nélküli, legfelső ablak.
+    Egeres mód: kattintható, aktiválható, kerettel (mozgatható, átméretezhető). Az ablak helye a módváltásnál nem változik."""
+    _LAYERED, _TRANSPARENT, _TOOLWINDOW, _NOACTIVATE = 0x00080000, 0x00000020, 0x00000080, 0x08000000
+    _CAPTION_FRAME = 0x00C00000 | 0x00040000                      # WS_CAPTION | WS_THICKFRAME
+    _SWP_NOSIZE_NOMOVE_NOACTIVATE_FRAMECHANGED = 0x0001 | 0x0002 | 0x0010 | 0x0020
+
+    def __init__(self, title):
+        self.title = title
+        self.user32 = ctypes.WinDLL("user32")                     # külön példány: az itteni típusmegadás a modul többi hívását nem érinti
+        api = self.user32
+        api.FindWindowW.restype, api.FindWindowW.argtypes = ctypes.c_void_p, [wt.LPCWSTR, wt.LPCWSTR]
+        api.GetForegroundWindow.restype = ctypes.c_void_p
+        api.SetForegroundWindow.argtypes = [ctypes.c_void_p]
+        api.GetWindowLongW.restype, api.GetWindowLongW.argtypes = ctypes.c_long, [ctypes.c_void_p, ctypes.c_int]
+        api.SetWindowLongW.restype, api.SetWindowLongW.argtypes = ctypes.c_long, [ctypes.c_void_p, ctypes.c_int, ctypes.c_long]
+        api.SetLayeredWindowAttributes.argtypes = [ctypes.c_void_p, wt.COLORREF, wt.BYTE, wt.DWORD]
+        api.SetWindowPos.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+        api.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(wt.RECT)]
+        api.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
+
+    def own(self):
+        return self.user32.FindWindowW(None, self.title) or 0
+
+    def foreground(self):
+        return self.user32.GetForegroundWindow() or 0
+
+    def set_foreground(self, handle):
+        self.user32.SetForegroundWindow(handle)
+
+    def rect(self):
+        box = wt.RECT()
+        self.user32.GetWindowRect(self.own(), ctypes.byref(box))
+        return box.left, box.top, box.right - box.left, box.bottom - box.top
+
+    def dpi(self):
+        """Az ablak monitorjának DPI-je (96 = 100%-os skálázás); ismeretlen esetén 96."""
+        try:
+            return self.user32.GetDpiForWindow(self.own()) or 96
+        except (AttributeError, OSError):
+            return 96
+
+    def show(self):
+        self.user32.ShowWindow(self.own(), 4)                      # SW_SHOWNOACTIVATE: a játék marad az előtérben
+
+    def hide(self):
+        self.user32.ShowWindow(self.own(), 0)                      # SW_HIDE
+
+    def apply(self, mode, alpha):
+        handle = self.own()
+        if not handle:
+            return
+        api = self.user32
+        ex_style, style = api.GetWindowLongW(handle, -20), api.GetWindowLongW(handle, -16)
+        if mode == "mouse":
+            ex_style = (ex_style | self._LAYERED) & ~(self._TRANSPARENT | self._NOACTIVATE)
+            style |= self._CAPTION_FRAME
+        else:
+            ex_style |= self._LAYERED | self._TRANSPARENT | self._TOOLWINDOW | self._NOACTIVATE
+            style &= ~self._CAPTION_FRAME
+        api.SetWindowLongW(handle, -20, ex_style)
+        api.SetWindowLongW(handle, -16, style)
+        api.SetLayeredWindowAttributes(handle, 0, int(alpha * 255), 2)             # LWA_ALPHA
+        api.SetWindowPos(handle, ctypes.c_void_p(-1), 0, 0, 0, 0, self._SWP_NOSIZE_NOMOVE_NOACTIVATE_FRAMECHANGED)   # TOPMOST

@@ -29,7 +29,33 @@ def send_action_cli(text):
     return 0
 
 
+def run_map_cli():
+    """`--map <azonosító>`: a térképfolyamat (pywebview-ablak). Érvénytelen azonosítóra 2-es kilépési kóddal áll meg."""
+    from map_window import parse_command, run
+    map_index = sys.argv.index("--map")
+    command = parse_command(f"map {sys.argv[map_index + 1] if map_index + 1 < len(sys.argv) else ''}")
+    if command is None:
+        print("Érvénytelen térkép-azonosító.", file=sys.stderr)
+        sys.exit(2)
+    from config import load_settings
+    settings = load_settings()
+    run(command[1], settings.get("map_alpha", 0.85), settings.get("map_rect"))
+
+
+def run_web_cli():
+    """`--web`: a böngészőfolyamat (pywebview-ablak a keresőmotorral)."""
+    from config import load_settings
+    from map_window import run_web
+    run_web(load_settings().get("web_rect"))
+
+
 def main():
+    if "--map" in sys.argv:
+        run_map_cli()
+        return
+    if "--web" in sys.argv:
+        run_web_cli()
+        return
     if "--action" in sys.argv:
         action_index = sys.argv.index("--action")
         sys.exit(send_action_cli(sys.argv[action_index + 1] if action_index + 1 < len(sys.argv) else ""))

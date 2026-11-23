@@ -31,14 +31,19 @@ def build_main_window(page, panel):
     widgets.tabs.pack(fill="both", expand=True, pady=(10, 0))
     for tab_name in (TAB_IMAGE, TAB_COLORS, TAB_GAME, TAB_NIGHT, TAB_PROGRAM):
         widgets.tabs.add(tab_name)
-    _build_image_tab(widgets.tabs.tab(TAB_IMAGE), panel)
-    _build_colors_tab(widgets.tabs.tab(TAB_COLORS), panel)
-    _build_game_tab(widgets.tabs.tab(TAB_GAME), panel)
-    _build_night_tab(widgets.tabs.tab(TAB_NIGHT), panel)
-    _build_program_tab(widgets.tabs.tab(TAB_PROGRAM), panel)
+    for tab_name, build_tab in ((TAB_IMAGE, _build_image_tab), (TAB_COLORS, _build_colors_tab), (TAB_GAME, _build_game_tab),
+                                (TAB_NIGHT, _build_night_tab), (TAB_PROGRAM, _build_program_tab)):
+        build_tab(_scrollable_body(widgets.tabs.tab(tab_name)), panel)      # kis ablaknál sem vágódik le a fül tartalma
     _build_bottom_bar(page, panel)
     widgets.tabs.pack_forget()                              # a fülek az alsó sáv UTÁN kapjanak helyet
     widgets.tabs.pack(fill="both", expand=True, pady=(10, 0))
+
+
+def _scrollable_body(tab):
+    """A fül teljes területét kitöltő, görgethető átlátszó keret; ebbe kerül a fül tartalma."""
+    body = ctk.CTkScrollableFrame(tab, fg_color="transparent")
+    body.pack(fill="both", expand=True)
+    return body
 
 
 def _transparent_frame(parent):
@@ -211,6 +216,28 @@ def _build_program_tab(tab, panel):
     _hint(tab, "Ugyanaz a gomb nyitja és zárja. Nyitva: ↑↓ sor, ←→ állít (Shift: ×5), Del alapérték, Enter mentés, "
                "N új változat a mostani állásból, Esc elvet. Amíg nyitva van, ezek a gombok nem jutnak el a játékhoz.",
           pady=(4, 0))
+    if sys.platform == "win32":
+        section_title(tab, "Gyorsgomb: főmenü (Térkép, Böngésző, Képbeállítások)")
+        widgets.menu_hotkey = HotkeyEntry(tab, on_change=lambda text: panel.set_setting("menu_hotkey", text))
+        widgets.menu_hotkey.pack(anchor="w")
+        _hint(tab, "Ugyanaz a gomb nyitja és zárja a játék fölött. Nyitva: ↑↓ választ, Enter megnyit, Esc zár; egérrel is "
+                   "kattintható. Alapból Shift+Tab: a Képprofil futása alatt ezt a gombot a Képprofil használja, egyik program (a játék sem) kapja meg; ha másra kell, itt átállítható.",
+              pady=(4, 0))
+        section_title(tab, "Gyorsgomb: térkép elő-/eltüntetése (Escape from Tarkov)")
+        widgets.map_hotkey = HotkeyEntry(tab, on_change=lambda text: panel.set_setting("map_hotkey", text))
+        widgets.map_hotkey.pack(anchor="w")
+        _hint(tab, "Áttetsző, átkattintható interaktív térkép a játék fölött. A pályát a Tarkov logjából ismeri fel, és a raid "
+                   "betöltésekor magától megnyílik (alább kikapcsolható).", pady=(4, 0))
+        section_title(tab, "Gyorsgomb: a térkép módjának léptetése")
+        widgets.map_interact_hotkey = HotkeyEntry(
+            tab, on_change=lambda text: panel.set_setting("map_interact_hotkey", text))
+        widgets.map_interact_hotkey.pack(anchor="w")
+        _hint(tab, "Pillantás → billentyűzet (←↑↓→ mozgat, numpad + és − nagyít, PageUp/PageDown az átlátszóságot állítja, Esc kilép; amíg ez a mód él, ezek a gombok nem "
+                   "jutnak el a játékhoz) → egér (az ablak fókuszt kap, mozgatható, kattintható) → pillantás.", pady=(4, 0))
+        widgets.map_auto_switch = ctk.CTkSwitch(tab, text="A térkép automatikus megnyitása a raid betöltésekor",
+                                                command=panel.toggle_map_auto)
+        widgets.map_auto_switch.pack(anchor="w", pady=(10, 0))
+        widgets.map_alpha = _slider(panel, tab, "Térkép átlátszósága", 20, 100, 80, format_percent, default=85)
     section_title(tab, "Gyorsgomb: semleges kép (minden kikapcsol)")
     widgets.neutral_hotkey = HotkeyEntry(tab, on_change=lambda text: panel.set_setting("neutral_hotkey", text))
     widgets.neutral_hotkey.pack(anchor="w")

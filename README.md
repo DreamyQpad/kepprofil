@@ -6,7 +6,7 @@ kilépéskor visszaáll az alaphelyzet. Kézzel is váltható tálcamenüből va
 
 Eredetileg két, kézzel összerakott szkriptből (Linuxos KDE-panel, majd PowerShell-es változat) nőtt egy közös programmá.
 
-**Állapot (v2.11):** Windows 11-en és Linuxon (KDE Plasma Wayland) is használatra kész; a Linuxos változat valódi gépen
+**Állapot (v2.24):** Windows 11-en és Linuxon (KDE Plasma Wayland) is használatra kész; a Linuxos változat valódi gépen
 tesztelve, működik – lásd [LINUX.md](LINUX.md).
 
 ## Mit tud
@@ -19,6 +19,16 @@ tesztelve, működik – lásd [LINUX.md](LINUX.md).
   (fényerő, kontraszt, gamma, vibrance, R/G/B), és a játék elvesztése nélkül, billentyűzettel szerkeszthető: ↑↓ sor,
   ←→ állít (Shift: ×5), Del alapérték, Enter mentés, N új változat a mostani állásból, Esc elvet. Nyitva tartás alatt ezek
   a gombok nem jutnak el a játékhoz; ha a játék kilép vagy a preset vált, a panel magától bezárul.
+- **Térkép-overlay (Escape from Tarkov, csak Windows)**: a Tarkov logjából (`Logs\log_*\*application_000.log`) felismeri a pályát
+  (betöltéskor előkészíti, a raid indulásakor megnyitja, a raid végén bezárja), és a tarkov.dev interaktív térképét mutatja
+  a játék fölött. Három mód (Program fül, két gyorsgomb): **pillantás** (áttetsző, átkattintható, a játék megtartja a fókuszt),
+  **billentyűzet** (←↑↓→ mozgat, numpad + és − nagyít, PageUp/PageDown az átlátszóságot állítja, Esc kilép; ekkor ezek a gombok nem jutnak el a játékhoz), **egér**
+  (az ablak fókuszt kap, mozgatható, kattintható; az Esc elrejti a térképet; kilépéskor a játék visszakapja a fókuszt, a hely megmarad). Az átlátszóság
+  és az automatikus megnyitás állítható. A térkép külön folyamat (`--map`, pywebview + WebView2), nem injektál a játékba.
+- **Főmenü és böngésző (csak Windows)**: egy gyorsgombbal (alapból **Shift+Tab**, a Program fülön átállítható) a játék fölé
+  jön a menü: **Térkép**, **Böngésző**, **Képbeállítások** (a profil-overlay). Kattintható, és ↑↓ / Enter / Esc is működik; a
+  játék megtartja a fókuszt. A böngésző minimális (külön folyamat, Google kezdőoldal, Vissza / Előre / Bezár gomb, nincs címsor);
+  csak a használata alatt fut, és a térkép fölé kerül, ha az is látszik. A tetején **könyvjelzősáv** van: a ☆ az éppen nyitott oldalt menti, a könyvjelzőre kattintva odalép, a × törli. A sáv **játékonként külön** van (az aktív játék presetjének neve alapján; ha nincs aktív játék, a közös „Általános” sáv látszik); legfeljebb 30 könyvjelző fér egy sávba. A Képprofil futása alatt a Shift+Tab a menüt nyitja.
 - **Összehasonlítás**: gombnyomásig a semleges kép látszik.
 - **Éjszakai mód**: monitoronként kapcsolható, állítható erősséggel; játék-preset alatt szünetel.
 - **Profil presetenként**: energiaprofil és RGB (OpenRGB SDK: szín / ki / mentett állapot) is váltható.
@@ -50,9 +60,17 @@ Egyetlen kódbázis, a platformfüggő részek külön modulban (`hw_windows.py`
 | `hw.py`, `system.py` | platformválasztó |
 | `hw_windows.py`, `hw_linux.py` | monitorok, kép beállítása (`Display`), energiaprofil, gyorsgomb, rendszeresemények |
 | `system_windows.py`, `system_linux.py` | futó programok, autostart, egy példány, megnyitás |
+| `hotkey_layers.py` | az overlay, a menü és a térkép gyorsgomb-rétegei: az alap fölé kerülnek, egymást nem írják felül |
 | `hw_common.py` | közös: OpenRGB, gyorsgomb-szöveg értelmezése |
 | `config.py` | presetek, beállítások, mentés, napló |
 | `engine.py` | motor: aktív presetek, játékfigyelő, visszaállítás, mellékhatások |
+| `tarkov_log.py` | a Tarkov logjának feldolgozása: pályaesemények (preload / raid / end), pálya-táblázat, naplókövetés |
+| `map_overlay.py` | a térkép-overlay szülő oldali vezérlője (módok, gyorsgombok, folyamatkezelés) és a logfigyelő összekötése |
+| `menu_overlay.py` | a főmenü: modell (léptetés), nem aktiválódó tk-nézet, vezérlő (nyitás, billentyűfoglalás, akciók) |
+| `bookmarks.py` | a böngésző könyvjelzői játékonként: hozzáadás, törlés, ellenőrzés (csak http/https) |
+| `web_bar.py` | a böngészőablak sávja (Vissza, Előre, ☆, könyvjelzők, Bezár) és a könyvjelző-sorok |
+| `browser_overlay.py` | a böngészőfolyamat (`--web`) szülő oldali vezérlője |
+| `map_window.py` | a térképfolyamat (`--map`): pywebview-ablak, parancshurok (stdin), ablak-módok |
 | `overlay.py` | játék-overlay: modell (értékek, mentés), nem aktiválódó megjelenítő, vezérlő (nyitás, billentyűk) |
 | `gui.py` | a felület belépője: a motor, a gyorsgombok, a tálca, az ablak és a főszál üzenetsorának összekötése |
 | `gui_layout.py` | a főablak elrendezése (fülek, elemek létrehozása), viselkedés nélkül |

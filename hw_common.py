@@ -81,10 +81,19 @@ OVERLAY_KEYS = {"ov|up": (0, 0x26, True), "ov|down": (0, 0x28, True),
                 "ov|reset": (0, 0x2E, False), "ov|save": (0, 0x0D, False),
                 "ov|new": (0, 0x4E, False), "ov|close": (0, 0x1B, False)}
 
+# A térkép billentyűzetes módjának gombjai (formátum: mint az OVERLAY_KEYS): nyilak mozgatnak, a numpad + és − nagyít (VK_ADD,
+# VK_SUBTRACT: a billentyűkiosztástól független), PageUp/PageDown az átlátszóságot állítja, Esc kilép a módból. Csak ebben a módban vannak lefoglalva.
+MAP_KEYS = {"mp|up": (0, 0x26, True), "mp|down": (0, 0x28, True), "mp|left": (0, 0x25, True), "mp|right": (0, 0x27, True),
+            "mp|zin": (0, 0x6B, True), "mp|zout": (0, 0x6D, True), "mp|aup": (0, 0x21, True), "mp|adown": (0, 0x22, True),
+            "mp|exit": (0, 0x1B, False)}
+
+# A főmenü gombjai (formátum: mint az OVERLAY_KEYS): ↑/↓ léptet, Enter választ, Esc zár. Csak a menü nyitva tartása alatt foglaltak.
+MENU_KEYS = {"mn|up": (0, 0x26, True), "mn|down": (0, 0x28, True), "mn|ok": (0, 0x0D, False), "mn|close": (0, 0x1B, False)}
+
 MODS = {"ctrl": 0x2, "alt": 0x1, "shift": 0x4}
 NAMED_KEYS = {"esc": 0x1B, "space": 0x20, "insert": 0x2D, "delete": 0x2E, "home": 0x24, "end": 0x23,
               "pageup": 0x21, "pagedown": 0x22, "up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27,
-              "pause": 0x13}
+              "pause": 0x13, "tab": 0x09}
 
 
 def parse_hotkey(text):

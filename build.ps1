@@ -15,6 +15,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Ikon-keszites hiba' }
   --add-data "$root\assets;assets" `
   --collect-all customtkinter --collect-all openrgb --collect-submodules pystray --hidden-import pystray._win32 `
   --hidden-import psutil `
+  --collect-all webview --collect-all pythonnet --collect-all clr_loader `
   "$root\kijelzo.py" *> "$b\pyinstaller.log"
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller hiba, lasd: $b\pyinstaller.log" }
 

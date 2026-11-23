@@ -50,17 +50,24 @@ class FakeView:
         self.is_open = False
 
 
-def build(test, cfg=None, active=("MON1", "Játék"), fg=None, main=False, failed=()):
+def build(test, cfg=None, active=("MON1", "Játék"), fg=None, main=False, failed=(), dirty=False):
     eng, display = make_engine(test, cfg, active=active)
     root, view = FakeRoot(), FakeView()
-    state = {"fg": fg, "main": main, "failed": set(failed)}
+    state = {"fg": fg, "main": main, "failed": set(failed), "hidden": 0}
     hk_calls, rect_calls = [], []
 
     def rect_for(mid):
         rect_calls.append(mid)
         return (0, 0, 1920, 1080)
 
-    ctl = OverlayController(eng, root, set_hotkeys=lambda m: hk_calls.append(dict(m)),
+    def hide_main():
+        if dirty:
+            return False
+        state["main"] = False
+        state["hidden"] += 1
+        return True
+
+    ctl = OverlayController(eng, root, hide_main=hide_main, set_hotkeys=lambda m: hk_calls.append(dict(m)),
                            foreground_mid=lambda: state["fg"], rect_for=rect_for,
                            hotkey_failed=lambda: state["failed"], main_visible=lambda: state["main"], view=view)
     ctl.t = type("T", (), {"eng": eng, "display": display, "root": root, "view": view, "state": state,
@@ -90,11 +97,22 @@ class Opening(unittest.TestCase):
         self.assertEqual(t.eng.toasts, ["Nincs aktív preset"])
         self.assertEqual(t.hk, [])
 
-    def test_main_window_visible_does_not_open(self):
+    def test_main_window_visible_is_hidden_and_overlay_opens(self):
         ctl = build(self, main=True)
         ctl.toggle()
+        self.assertTrue(ctl.is_open and ctl.t.eng.panel_open)
+        self.assertEqual(ctl.t.state["hidden"], 1)
+
+    def test_main_window_with_unsaved_changes_blocks_opening_and_toasts(self):
+        ctl = build(self, main=True, dirty=True)
+        ctl.toggle()
         self.assertFalse(ctl.is_open or ctl.t.eng.panel_open)
-        self.assertEqual(ctl.t.eng.toasts, [])
+        self.assertEqual(ctl.t.eng.toasts, ["Mentetlen módosítás a főablakban: mentsd vagy dobd el"])
+
+    def test_main_window_hidden_does_not_call_hide(self):
+        ctl = build(self)
+        ctl.toggle()
+        self.assertEqual(ctl.t.state["hidden"], 0)
 
     def test_foreground_monitor_is_preferred(self):
         cfg = default_cfg()

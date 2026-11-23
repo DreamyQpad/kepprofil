@@ -263,6 +263,11 @@ def overlay_style(window):
     window.attributes("-topmost", True)
 
 
+def menu_style(window):
+    """Waylanden a menü ablaka sem lehet nem aktiválódó; amit lehet, megtesszük."""
+    window.attributes("-topmost", True)
+
+
 # ---------------------------------------------------------------- energiaprofil (power-profiles-daemon)
 
 def parse_power_profiles(text):

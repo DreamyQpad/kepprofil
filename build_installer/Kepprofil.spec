@@ -2,7 +2,7 @@
 from PyInstaller.utils.hooks import collect_submodules
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('C:/Users/blump/kijelzo/assets', 'assets')]
+datas = [('E:/Development/kijelzo/assets', 'assets')]
 binaries = []
 hiddenimports = ['pystray._win32', 'psutil']
 hiddenimports += collect_submodules('pystray')
@@ -10,11 +10,17 @@ tmp_ret = collect_all('customtkinter')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('openrgb')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('webview')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('pythonnet')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('clr_loader')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
-    ['C:/Users/blump/kijelzo/kijelzo.py'],
-    pathex=['C:/Users/blump/kijelzo'],
+    ['E:/Development/kijelzo/kijelzo.py'],
+    pathex=['E:/Development/kijelzo'],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
@@ -43,7 +49,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['C:/Users/blump/kijelzo/assets/icon.ico'],
+    icon=['E:/Development/kijelzo/assets/icon.ico'],
 )
 coll = COLLECT(
     exe,

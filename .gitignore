@@ -10,3 +10,7 @@ presets.json
 settings.json
 log.txt
 log.old.txt
+prototypes/
+.superpowers/
+webview/
+webview-browser/
