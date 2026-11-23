@@ -144,12 +144,123 @@ class EventsTest(Base):
         self.assertEqual(controller.mode, "hidden")
 
 
-class ModesTest(Base):
-    def test_toggle_ismert_palya_nelkul_ertesit(self):
+class LearningTest(Base):
+    """A kézi választás megtanítja a programnak a logban látott, ismeretlen pályanevet."""
+
+    def test_a_kezi_valasztas_megtanulja_az_ismeretlen_nevet(self):
+        controller = self.make()
+        controller.on_event(MapEvent("preload", "UjPalya"))
+        controller.handle_output("selected terminal")
+        self.assertEqual(self.eng.set["map_learned"], {"ujpalya": "terminal"})
+
+    def test_a_megtanult_nev_kovetkezo_alkalommal_magatol_felismerodik(self):
+        controller = self.make(settings={"map_learned": {"ujpalya": "terminal"}})
+        controller.on_event(MapEvent("preload", "UjPalya"))
+        self.assertEqual(controller.slug, "terminal")
+        self.assertEqual([p.argv for p in self.procs], [["map", "terminal"]])
+
+    def test_a_raid_es_a_betoltes_neve_is_megtanulodik(self):
+        controller = self.make()
+        controller.on_event(MapEvent("preload", "ujpalya_betoltes"))
+        controller.on_event(MapEvent("raid", "UjPalya"))
+        controller.handle_output("selected terminal")
+        self.assertEqual(self.eng.set["map_learned"], {"ujpalya_betoltes": "terminal", "ujpalya": "terminal"})
+
+    def test_ismert_palya_utan_a_kezi_valasztas_nem_tanul_semmit(self):
+        controller = self.shown(self.make())
+        controller.handle_output("selected terminal")
+        self.assertFalse(self.eng.set.get("map_learned"))
+
+    def test_a_raid_vege_utan_a_valasztas_mar_nem_a_regi_ismeretlen_nevet_tanitja(self):
+        controller = self.make()
+        controller.on_event(MapEvent("preload", "UjPalya"))
+        controller.on_event(MapEvent("end", ""))
+        controller.handle_output("selected terminal")
+        self.assertFalse(self.eng.set.get("map_learned"))
+
+    def test_a_tanulas_egyszer_tortenik_a_masodik_valasztas_nem_ir_felul(self):
+        controller = self.make()
+        controller.on_event(MapEvent("preload", "UjPalya"))
+        controller.handle_output("selected terminal")
+        controller.handle_output("selected woods")
+        self.assertEqual(self.eng.set["map_learned"], {"ujpalya": "terminal"})
+
+    def test_ismeretlen_betoltes_utan_nem_marad_a_regi_terkep(self):
+        """A régi raid térképét nem mutatjuk az új, ismeretlen pályán."""
+        controller = self.shown(self.make())
+        controller.on_event(MapEvent("end", ""))
+        controller.on_event(MapEvent("preload", "UjPalya"))
+        self.assertIsNone(controller.slug)
+
+    def test_ismeretlen_raid_nev_ismert_betoltes_utan_megtartja_a_pályát(self):
+        controller = self.make()
+        controller.on_event(MapEvent("preload", "customs"))
+        controller.on_event(MapEvent("raid", "bigmap2"))
+        self.assertEqual(controller.slug, "customs")
+
+    def test_a_megtanult_nevek_szama_korlatos(self):
+        controller = self.make(settings={"map_learned": {f"n{i}": "customs" for i in range(50)}})
+        controller.on_event(MapEvent("preload", "UjPalya"))
+        controller.handle_output("selected terminal")
+        self.assertNotIn("ujpalya", self.eng.set["map_learned"])
+        self.assertEqual(len(self.eng.set["map_learned"]), 50)
+
+
+class PickerTest(Base):
+    """Ha a program nem tudja, melyik pályán vagy, a térképablakban kézzel választhatsz."""
+
+    def test_ismeretlen_palyanal_a_toggle_egeres_modban_nyitja_meg_a_valasztohoz(self):
         controller = self.make()
         controller.toggle()
-        self.assertEqual(self.procs, [])
-        self.assertEqual(len(self.eng.toasts), 1)
+        self.assertEqual(self.procs[0].argv, ["map", "ground-zero"])      # nincs korábbi választás: a lista első térképe
+        self.assertEqual(self.writes(), ["show", "mode mouse"])
+        self.assertEqual(controller.mode, "mouse")
+        self.assertEqual(len(self.eng.toasts), 1)                         # a súgó: válassz a térkép tetején
+
+    def test_ismeretlen_palyanal_az_utoljara_valasztott_terkepet_nyitja(self):
+        controller = self.make(settings={"map_last": "woods"})
+        controller.toggle()
+        self.assertEqual(self.procs[0].argv, ["map", "woods"])
+
+    def test_ervenytelen_mentett_palya_nem_indit_ismeretlen_terkepet(self):
+        controller = self.make(settings={"map_last": "../x"})
+        controller.toggle()
+        self.assertEqual(self.procs[0].argv, ["map", "ground-zero"])
+
+    def test_ismert_palyanal_nincs_kenyszeritett_egeres_mod(self):
+        controller = self.shown(self.make())
+        controller.toggle()                                                # elrejt
+        controller.toggle()                                                # újra megjelenik pillantás módban
+        self.assertEqual(controller.mode, "glance")
+
+    def test_a_folyamat_kivalasztott_palyaja_lesz_az_aktualis_es_mentodik(self):
+        controller = self.make()
+        controller.toggle()
+        controller.handle_output("selected shoreline")
+        self.assertEqual(controller.slug, "shoreline")
+        self.assertEqual(self.eng.set["map_last"], "shoreline")
+        controller.toggle()                                                # elrejt
+        controller.toggle()                                                # ugyanazzal a folyamattal, új betöltés nélkül
+        self.assertEqual(len(self.procs), 1)
+        self.assertFalse(any(text.startswith("map ") for text in self.writes()))
+
+    def test_a_kivalasztas_utan_a_kovetkezo_raid_esemeny_felulirja(self):
+        controller = self.make()
+        controller.toggle()
+        controller.handle_output("selected shoreline")
+        controller.on_event(MapEvent("preload", "woods"))
+        self.assertEqual(controller.slug, "woods")
+        self.assertIn("map woods", self.writes())
+
+    def test_ismeretlen_vagy_hibas_kivalasztas_sort_figyelmen_kivul_hagyja(self):
+        controller = self.make()
+        for line in ("selected", "selected evil", "selected ../x", "selected woods extra"):
+            controller.handle_output(line)
+        self.assertIsNone(controller.slug)
+        self.assertIsNone(self.eng.set.get("map_last"))
+
+
+class ModesTest(Base):
 
     def test_toggle_ciklus(self):
         controller = self.make()

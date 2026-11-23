@@ -147,6 +147,17 @@ class Panel:
         if self.app.map:
             self.app.map.set_alpha(alpha)
 
+    def forget_learned_maps(self):
+        """Törli a kézi választásokból megtanult pályaneveket."""
+        self.set_setting("map_learned", {})
+        self.refresh_learned_maps()
+
+    def refresh_learned_maps(self):
+        learned = self.eng.set.get("map_learned") or {}
+        lines = [f"{name} → {slug}" for name, slug in sorted(learned.items())]
+        self.widgets.learned_maps_label.configure(text="\n".join([f"Megtanult pályanevek: {len(learned)}"] + lines))
+        self.widgets.forget_maps_button.configure(state="normal" if learned else "disabled")
+
     def toggle_map_auto(self):
         self.set_setting("map_auto", bool(self.widgets.map_auto_switch.get()))
 
@@ -425,6 +436,7 @@ class Panel:
             widgets.map_interact_hotkey.set(settings.get("map_interact_hotkey", ""))
             set_switch(widgets.map_auto_switch, settings.get("map_auto", True))
             widgets.map_alpha.slider.set(round(settings.get("map_alpha", 0.85) * 100))
+            self.refresh_learned_maps()
             self.refresh_value_labels()
 
     def reload_after_import(self):

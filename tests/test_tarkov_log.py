@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from tarkov_log import LogTail, MapEvent, map_slug, parse_line, tarkov_install_dir
+from tarkov_log import CHOICE_SLUGS, MAP_CHOICES, MAP_SLUGS, LogTail, MapEvent, map_slug, parse_line, tarkov_install_dir
 
 PRELOAD = "2026-11-23 14:24:11.406|1.3.0.2.48779|Info|application|scene preset path:maps/woods_preset.bundle rcid:woods.scenespreset.asset"
 RAID = ("2026-11-23 14:24:23.457|1.3.0.2.48779|Debug|application|TRACE-NetworkGameCreate profileStatus: "
@@ -14,6 +14,30 @@ TRANSIT = ("2026-11-23 22:19:20.176|1.3.0.2.48779|Info|application|[Transit] Fla
            "RaidId:aaaaaaaaaaaaaaaaaaaaaaaa, Count:0, Locations:Sandbox_high -> ")
 END = "2026-11-23 16:41:47.100|1.3.0.2.48779|Info|application|BEClient exit"
 END_OK = "2026-11-23 16:41:48.100|1.3.0.2.48779|Info|application|BEClient exit successfully"
+
+
+class LearnedNamesTest(unittest.TestCase):
+    def test_a_megtanult_nev_a_tablazatban_nem_szereplo_palyat_is_felismeri(self):
+        self.assertEqual(map_slug("UjPalya", {"ujpalya": "terminal"}), "terminal")
+
+    def test_a_tablazat_elsobbsegu_a_megtanult_nevvel_szemben(self):
+        self.assertEqual(map_slug("woods", {"woods": "customs"}), "woods")
+
+    def test_ismeretlen_nev_megtanulas_nelkul_none(self):
+        self.assertIsNone(map_slug("UjPalya"))
+        self.assertIsNone(map_slug("UjPalya", {}))
+        self.assertIsNone(map_slug("UjPalya", None))
+
+
+class MapChoicesTest(unittest.TestCase):
+    def test_a_valaszthato_terkepek_azonositoi_egyediek_es_nevuk_nem_ures(self):
+        slugs = [slug for slug, name in MAP_CHOICES]
+        self.assertEqual(len(slugs), len(set(slugs)))
+        self.assertTrue(all(name.strip() for slug, name in MAP_CHOICES))
+        self.assertEqual(CHOICE_SLUGS, frozenset(slugs))
+
+    def test_minden_felismert_palya_valaszthato_is(self):
+        self.assertLessEqual(set(MAP_SLUGS.values()), CHOICE_SLUGS)
 
 
 class ParseLineTest(unittest.TestCase):

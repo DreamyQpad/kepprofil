@@ -5,6 +5,7 @@ import sys
 import unittest
 from unittest import mock
 
+from tarkov_log import MAP_CHOICES
 from map_window import (WEB_TITLE, MapApi, WindowModes, WebApi, escape_script, add_bookmark_line, nav_buttons_script, remove_bookmark_line,
                         web_bar_script, web_url, parse_command, pan_script, read_commands, serve_commands, tarkov_url, to_logical_rect,
                         wait_until, zoom_script)
@@ -245,6 +246,17 @@ class NavButtonsScriptTest(unittest.TestCase):
         self.assertIn("['\u2190Vissza',-1]", script)
         self.assertIn("['El\u0151re\u2192',1]", script)
 
+    def test_palyavalaszto_minden_terkeppel_es_a_kivalasztas_visszahivasaval(self):
+        script = nav_buttons_script(True)
+        self.assertIn(json.dumps([[slug, name] for slug, name in MAP_CHOICES]), script)
+        compact = script.replace(" ", "")
+        self.assertIn("pywebview.api.select_map(s.value)", compact)
+        self.assertIn("location.assign('https://tarkov.dev/map/'+s.value)", compact)   # a betöltés a hívás visszatérése után
+        self.assertIn("kp-map-select", compact)
+
+    def test_a_valaszto_az_oldal_cimebol_allitja_be_az_aktualis_palyat(self):
+        self.assertIn("location.pathname.match(", nav_buttons_script(True))
+
     def test_lathatosag_a_parameter_szerint(self):
         self.assertIn("style.display='flex'", nav_buttons_script(True))
         self.assertIn("style.display='none'", nav_buttons_script(False))
@@ -372,6 +384,18 @@ class EscapeTest(unittest.TestCase):
         MapApi(lambda: calls.append("esc")).escape()
         self.assertEqual(calls, ["esc"])
 
+    def test_map_api_a_valasztott_palyat_adja_tovabb(self):
+        chosen = []
+        MapApi(lambda: None, chosen.append).select_map("woods")
+        self.assertEqual(chosen, ["woods"])
+
+    def test_map_api_ismeretlen_vagy_hibas_palyat_nem_ad_tovabb(self):
+        chosen = []
+        api = MapApi(lambda: None, chosen.append)
+        for value in ("evil", "../x", "", None, 5, "https://rossz.example"):
+            api.select_map(value)
+        self.assertEqual(chosen, [])
+
 
 @unittest.skipUnless(sys.platform == "win32", "a folyamat a Windows-os ablakréteget tölti be")
 class CreateWindowTest(unittest.TestCase):
@@ -380,6 +404,7 @@ class CreateWindowTest(unittest.TestCase):
     def create_kwargs(self, web):
         import map_window
         captured = {}
+        self.window = None
 
         class Hook:
             def __iadd__(self, handler):
@@ -395,6 +420,7 @@ class CreateWindowTest(unittest.TestCase):
             captured.update(kwargs)
             window = mock.MagicMock()
             window.events = Events()
+            self.window = window
             return window
 
         fake.create_window = create_window
@@ -409,6 +435,16 @@ class CreateWindowTest(unittest.TestCase):
     def test_a_terkep_ablak_kap_escape_felületet_a_bongeszo_nem(self):
         self.assertIsInstance(self.create_kwargs(False)["js_api"], MapApi)
         self.assertIsInstance(self.create_kwargs(True)["js_api"], WebApi)
+
+    def test_a_valasztott_palyat_a_folyamat_jelzi_a_szulonek_a_betoltest_az_oldal_vegzi(self):
+        """A betöltést nem a `js_api` hívás közben indítjuk: az oldal újratöltődne, mielőtt a hívás visszatérne."""
+        import contextlib
+        kwargs = self.create_kwargs(False)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            kwargs["js_api"].select_map("woods")
+        self.assertEqual(output.getvalue().split(), ["selected", "woods"])
+        self.window.load_url.assert_not_called()
 
     def test_az_uj_ablakot_nyito_linkek_ugyanabban_az_ablakban_nyilnak(self):
         """Különben a rendszer alapböngészője ugrana elő, és a játék elveszítené a fókuszt."""

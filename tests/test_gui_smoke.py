@@ -152,6 +152,32 @@ class GuiSmokeTest(unittest.TestCase):
         self.run_scenario(sc)
 
     @unittest.skipUnless(sys.platform == "win32", "a térkép-overlay csak Windowson érhető el")
+    def test_a_megtanult_palyanevek_listaja_es_torlese_a_program_fulon(self):
+        self.eng.set["map_learned"] = {"ujpalya": "terminal", "masik": "woods"}
+
+        def sc(root, H):
+            panel, widgets = H["panel"], H["panel"].widgets
+            text = widgets.learned_maps_label.cget("text")
+            self.assertIn("2", text)
+            self.assertIn("ujpalya → terminal", text)
+            self.assertIn("masik → woods", text)
+            self.assertEqual(widgets.forget_maps_button.cget("state"), "normal")
+            panel.forget_learned_maps()
+            self.assertEqual(self.eng.set["map_learned"], {})
+            self.assertIn("0", widgets.learned_maps_label.cget("text"))
+            self.assertNotIn("→", widgets.learned_maps_label.cget("text"))
+            self.assertEqual(widgets.forget_maps_button.cget("state"), "disabled")
+        self.run_scenario(sc)
+
+    @unittest.skipUnless(sys.platform == "win32", "a térkép-overlay csak Windowson érhető el")
+    def test_nincs_megtanult_nev_a_torles_gomb_szurke(self):
+        def sc(root, H):
+            widgets = H["panel"].widgets
+            self.assertIn("0", widgets.learned_maps_label.cget("text"))
+            self.assertEqual(widgets.forget_maps_button.cget("state"), "disabled")
+        self.run_scenario(sc)
+
+    @unittest.skipUnless(sys.platform == "win32", "a térkép-overlay csak Windowson érhető el")
     def test_a_terkep_atlatszosag_csuszkaja_a_futo_folyamatnak_kuldi_az_erteket(self):
         def sc(root, H):
             sent = []

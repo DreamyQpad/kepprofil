@@ -7,8 +7,9 @@ a folyamat is kilép, így nem marad árva ablak.
 Parancsok: map <azonosító> | show | hide | mode glance|keys|mouse | pan up|down|left|right | zoom in|out |
 alpha <0,2–1,0> | rect <x> <y> <szélesség> <magasság> | bookmarks <json> (csak a böngészőben) | quit.
 Kimenet (stdout, soronként): `loaded`; egeres módból kilépéskor `rect <x> <y> <szélesség> <magasság>` (logikai pixel);
-`hidden` (a térkép Esc-re maga elrejtette az ablakot); `closed` (a böngésző Bezár gombja); `bookmark add <json>` és
+`hidden` (a térkép Esc-re maga elrejtette az ablakot); `selected <térkép>` (a pályaválasztóból kézzel választott pálya); `closed` (a böngésző Bezár gombja); `bookmark add <json>` és
 `bookmark remove <sorszám>` (a böngésző könyvjelzősávja)."""
+import json
 import os
 import re
 import secrets
@@ -16,6 +17,7 @@ import sys
 import threading
 import time
 
+from tarkov_log import CHOICE_SLUGS, MAP_CHOICES
 from web_bar import add_bookmark_line, parse_bookmarks_command, remove_bookmark_line, web_bar_script  # noqa: F401
 
 TITLE = "Képprofil térkép"
@@ -124,16 +126,29 @@ def zoom_script(direction):
 
 
 def nav_buttons_script(visible):
-    """A „← Vissza” és „Előre →” gomb a térkép oldalában (bal felső sarok): az előző/következő oldalra lép. Újrafuttatva a
-    meglévő gombsort frissíti, így a módváltás és az oldalbetöltés is ugyanezt hívja."""
+    """A „← Vissza”, „Előre →” gomb és a pályaválasztó a térkép oldalában (bal felső sarok): az előző/következő oldalra lép,
+    illetve kézzel pályát vált, ha a program nem tudja, melyiken vagy. Újrafuttatva a meglévő sort frissíti (a választó az oldal
+    címéből veszi az aktuális pályát), így a módváltás és az oldalbetöltés is ugyanezt hívja."""
     display = "flex" if visible else "none"
+    choices = json.dumps([[slug, name] for slug, name in MAP_CHOICES])
     return ("(function(){var d=document.getElementById('kp-nav');if(!d){d=document.createElement('div');d.id='kp-nav';"
             "d.style.cssText='position:fixed;top:8px;left:8px;z-index:2147483647;gap:6px';"
             "[['\u2190 Vissza',-1],['El\u0151re \u2192',1]].forEach(function(x){var b=document.createElement('button');"
             "b.textContent=x[0];b.onclick=function(){history.go(x[1]);};"
             "b.style.cssText='padding:6px 12px;font:14px sans-serif;background:#222;color:#fff;border:1px solid #888;"
             "border-radius:4px;cursor:pointer';d.appendChild(b);});"
-            f"(document.body||document.documentElement).appendChild(d);}}d.style.display='{display}';}})()")
+            "var s=document.createElement('select');s.id='kp-map-select';s.title='P\u00e1lya kiv\u00e1laszt\u00e1sa';"
+            "s.style.cssText='padding:6px 8px;font:14px sans-serif;background:#222;color:#fff;border:1px solid #888;"
+            "border-radius:4px;cursor:pointer';"
+            f"{choices}.forEach(function(c){{var o=document.createElement('option');o.value=c[0];o.textContent=c[1];"
+            "s.appendChild(o);});"
+            "s.onchange=function(){if(window.pywebview&&window.pywebview.api){window.pywebview.api.select_map(s.value)"
+            ".then(function(){location.assign('https://tarkov.dev/map/'+s.value);});}};"
+            "d.appendChild(s);"
+            "(document.body||document.documentElement).appendChild(d);}"
+            "var m=location.pathname.match(/\\/map\\/([a-z0-9-]+)/);var sel=document.getElementById('kp-map-select');"
+            "if(m&&sel){sel.value=m[1];}"
+            f"d.style.display='{display}';}})()")
 
 
 def escape_script():
@@ -145,13 +160,18 @@ def escape_script():
 
 
 class MapApi:
-    """A térkép oldalából hívható felület (pywebview `js_api`): az Esc-figyelő ezen át szól a folyamatnak."""
+    """A térkép oldalából hívható felület (pywebview `js_api`): az Esc-figyelő és a pályaválasztó ezen át szól a folyamatnak.
+    A választott pálya csak az ismert térképek azonosítója lehet."""
 
-    def __init__(self, on_escape):
-        self._on_escape = on_escape
+    def __init__(self, on_escape, on_select=lambda slug: None):
+        self._on_escape, self._on_select = on_escape, on_select
 
     def escape(self):
         self._on_escape()
+
+    def select_map(self, slug):
+        if isinstance(slug, str) and slug in CHOICE_SLUGS:
+            self._on_select(slug)
 
 
 class WebApi:
@@ -267,6 +287,12 @@ def _run_window(url, title, storage_name, alpha, rect, web):
             emit(line)
         emit("hidden")
 
+    def select_from_page(slug):
+        """A pályaválasztó: jelzi a szülőnek, hogy innentől ez az aktuális pálya. A betöltést az oldal végzi a hívás
+        visszatérése után (ha itt töltenénk be, az oldal újratöltődne, mielőtt a hívás visszatérne)."""
+        current["url"] = tarkov_url(slug)
+        emit(f"selected {slug}")
+
     def current_page():
         return window.get_current_url(), window.evaluate_js("document.title")
 
@@ -275,7 +301,7 @@ def _run_window(url, title, storage_name, alpha, rect, web):
     webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = False
     window = webview.create_window(title, url, x=left, y=top, width=width, height=height, frameless=True, easy_drag=False, on_top=True,
                                    hidden=True,
-                                   js_api=WebApi(close_from_page, emit, current_page, token) if web else MapApi(escape_from_page))
+                                   js_api=WebApi(close_from_page, emit, current_page, token) if web else MapApi(escape_from_page, select_from_page))
     current = {"url": url, "bookmarks": {"game": "", "items": []}}
 
     def handle(command):

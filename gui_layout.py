@@ -238,6 +238,13 @@ def _build_program_tab(tab, panel):
                                                 command=panel.toggle_map_auto)
         widgets.map_auto_switch.pack(anchor="w", pady=(10, 0))
         widgets.map_alpha = _slider(panel, tab, "Térkép átlátszósága", 20, 100, 80, format_percent, default=85)
+        widgets.learned_maps_label = ctk.CTkLabel(tab, text="", anchor="w", justify="left", wraplength=HINT_WRAP)
+        widgets.learned_maps_label.pack(anchor="w", pady=(14, 0))
+        widgets.forget_maps_button = _grey_button(tab, "Megtanult pályanevek törlése", 220, panel.forget_learned_maps)
+        widgets.forget_maps_button.pack(anchor="w", pady=(4, 0))
+        _hint(tab, "Ha a program nem ismeri fel a pályát, a térképablak tetején kézzel választhatsz; a választás megtanítja a "
+                   "pálya logbeli nevét, így legközelebb magától felismeri. Itt törölheted a megtanultakat (például egy téves "
+                   "választás után).", pady=(4, 0))
     section_title(tab, "Gyorsgomb: semleges kép (minden kikapcsol)")
     widgets.neutral_hotkey = HotkeyEntry(tab, on_change=lambda text: panel.set_setting("neutral_hotkey", text))
     widgets.neutral_hotkey.pack(anchor="w")

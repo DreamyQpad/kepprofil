@@ -16,6 +16,15 @@ class MapEvent(NamedTuple):
     name: str          # a játék-belső pályanév; "end" esetén üres
 
 
+# A kézzel választható térképek (tarkov.dev azonosító, név) a választó sorrendjében.
+MAP_CHOICES = (
+    ("ground-zero", "Ground Zero"), ("customs", "Customs"), ("factory", "Factory"), ("woods", "Woods"),
+    ("shoreline", "Shoreline"), ("interchange", "Interchange"), ("reserve", "Reserve"), ("lighthouse", "Lighthouse"),
+    ("streets-of-tarkov", "Streets of Tarkov"), ("the-lab", "The Lab"), ("the-labyrinth", "Labyrinth"),
+    ("icebreaker", "Icebreaker"), ("terminal", "Terminal"),
+)
+CHOICE_SLUGS = frozenset(slug for slug, name in MAP_CHOICES)
+
 # Játék-belső név (kisbetűs) -> tarkov.dev térkép-azonosító. A betöltési sorban és a raid-sorokban a név eltérhet.
 # A gép logjából igazolt nevek: customs (betöltés), bigmap (helyi raid; Customs), woods, shoreline, sandbox_high (Ground Zero), city és
 # tarkovstreets (Streets). A többi a játék ismert belső neve, logból még nem láttuk; ismeretlen raid-névnél a vezérlő az
@@ -57,9 +66,11 @@ def parse_line(line):
     return None
 
 
-def map_slug(name):
-    """Játék-belső pályanév -> tarkov.dev azonosító; ismeretlen névre None."""
-    return MAP_SLUGS.get(name.lower())
+def map_slug(name, learned=None):
+    """Játék-belső pályanév -> tarkov.dev azonosító; ismeretlen névre None. A `learned` a felhasználó által kézzel megtanított
+    nevek (kisbetűs név -> azonosító); a beépített táblázat elsőbbséget élvez."""
+    key = name.lower()
+    return MAP_SLUGS.get(key) or (learned or {}).get(key)
 
 
 def tarkov_install_dir(setting=""):

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from consts import CREATE_NO_WINDOW
 from hw_common import MAP_KEYS
-from tarkov_log import LogTail, map_slug, tarkov_install_dir
+from tarkov_log import CHOICE_SLUGS, MAP_CHOICES, LogTail, map_slug, tarkov_install_dir
 
 HERE = Path(__file__).resolve().parent
 EXIT_WAIT_SECONDS = 3
@@ -39,6 +39,9 @@ def allow_foreground():
         ctypes.windll.user32.AllowSetForegroundWindow(ASFW_ANY)
 
 
+MAX_LEARNED = 50                                  # a kézzel megtanított pályanevek legnagyobb száma
+
+
 class MapController:
     """set_hotkeys(mapping): a teljes gyorsgomb-térkép cseréje (mint az OverlayControllernél); spawn és allow_foreground
     kívülről cserélhető, így folyamat nélkül tesztelhető."""
@@ -48,23 +51,26 @@ class MapController:
         self.argv_for, self.allow_foreground = argv_for, allow_foreground
         self.mode, self.slug, self._preloaded = "hidden", None, False
         self._proc, self._running_slug, self._reader = None, None, None
-        self._output, self._unknown = queue.Queue(), set()
+        self._output, self._unknown, self._unrecognized = queue.Queue(), set(), []
 
     # ---- pályaesemények
 
     def on_event(self, event):
         if event.kind == "end":
-            self._preloaded = False
+            self._preloaded, self._unrecognized = False, []
             self.stop(wait=False)
             return
-        slug = map_slug(event.name)
+        slug = map_slug(event.name, self.eng.set.get("map_learned"))
         if event.kind == "preload":
             self._preloaded = slug is not None
         if slug is None:
             if event.name not in self._unknown:
                 self._unknown.add(event.name)
                 self.eng.say(f"Ismeretlen Tarkov-pálya: {event.name}")
+            if event.name.lower() not in self._unrecognized:
+                self._unrecognized.append(event.name.lower())     # ezt tanítja meg a kézi választás
             if event.kind != "raid" or not self._preloaded or self.slug is None:
+                self.slug = None                  # új, ismeretlen pálya: a régi raid térképét nem mutatjuk helyette
                 return
             slug = self.slug                      # a raid-sor neve ismeretlen, de közvetlenül előtte ismert pálya töltődött be
         self.slug = slug
@@ -78,13 +84,12 @@ class MapController:
         if self.mode != "hidden":
             self._send("hide")
             self._set_state("hidden")
-        elif self._can_show():
-            self._show()
+        else:
+            self._open()
 
     def cycle_mode(self):
         if self.mode == "hidden":
-            if self._can_show():
-                self._show()
+            self._open()
             return
         self._set_mode(MODE_CYCLE[self.mode])
 
@@ -123,17 +128,34 @@ class MapController:
 
     def handle_output(self, line):
         """A térképfolyamat egy kimeneti sora: `rect x y w h` az ablak helyét a beállításba menti, `hidden` jelzi, hogy a folyamat
-        (Esc-re) maga elrejtette az ablakot."""
+        (Esc-re) maga elrejtette az ablakot, `selected <térkép>`: a pályaválasztóból kézzel választott pálya."""
         parts = line.split()
         if parts == ["hidden"]:
             if self.mode != "hidden":                   # a folyamat Esc-re maga rejtette el az ablakot
                 self._set_state("hidden")
+        elif len(parts) == 2 and parts[0] == "selected" and parts[1] in CHOICE_SLUGS:
+            self.slug = self._running_slug = parts[1]   # a folyamat már betöltötte; a következő raid-esemény felülírja
+            self.eng.set["map_last"] = parts[1]
+            self._learn(parts[1])
+            self.eng.save_settings()
         elif len(parts) == 5 and parts[0] == "rect":
             try:
                 self.eng.set["map_rect"] = [int(value) for value in parts[1:]]
             except ValueError:
                 return
             self.eng.save_settings()
+
+    def _learn(self, slug):
+        """A kézi választás megtanítja az ebben a raidben látott, ismeretlen pályaneveket (betöltés és raid neve), hogy
+        legközelebb a program magától felismerje. Egy raidben egyszer tanul; a megtanult nevek száma korlátos."""
+        names, self._unrecognized = self._unrecognized, []
+        if not names:
+            return
+        learned = self.eng.set.setdefault("map_learned", {})
+        for name in names:
+            if name not in learned and len(learned) < MAX_LEARNED:
+                learned[name] = slug
+        self.eng.say(f"Megtanult pálya: {', '.join(names)} = {slug}")
 
     def stop(self, wait=True):
         """Leállítja a folyamatot: az stdin lezárása (EOF) a kilépési jel; ha nem áll le, kilövi."""
@@ -159,11 +181,20 @@ class MapController:
 
     # ---- belső
 
-    def _can_show(self):
-        if self.slug is None:
-            self.eng.toast("Nincs ismert pálya")
-            return False
-        return self._ensure(self.slug)
+    def _open(self):
+        """Megjeleníti a térképet. Ha a pálya nem ismert, az utoljára választott (vagy az első) térképpel nyitja meg egér
+        módban, hogy a térkép tetején lévő választóval kézzel lehessen pályát választani."""
+        if self.slug is not None:
+            if self._ensure(self.slug):
+                self._show()
+            return
+        slug = self.eng.set.get("map_last")
+        if slug not in CHOICE_SLUGS:
+            slug = MAP_CHOICES[0][0]
+        if self._ensure(slug):
+            self._show()
+            self._set_mode("mouse")
+            self.eng.toast("Nincs ismert pálya: válassz a térkép tetején")
 
     def _show(self):
         if self._send("show"):

@@ -42,7 +42,7 @@ def write_log(text):
 
 
 DEFAULT_SETTINGS = {"night_strength": 60, "night_hotkey": "", "neutral_hotkey": "", "cycle_hotkey": "", "overlay_hotkey": "",
-                    "menu_hotkey": "Shift+Tab", "map_hotkey": "", "map_interact_hotkey": "", "map_auto": True, "map_alpha": 0.85, "map_rect": None, "web_rect": None,
+                    "menu_hotkey": "Shift+Tab", "map_hotkey": "", "map_interact_hotkey": "", "map_auto": True, "map_alpha": 0.85, "map_rect": None, "map_last": None, "web_rect": None,
                     "tarkov_path": "", "bookmarks": {}, "toast": True, "base_rgb": {"mode": "none", "value": ""}, "migrated": False}
 
 
@@ -59,7 +59,7 @@ def new_preset(values=NEUTRAL, process=""):
 
 BACKUP_DIR = DATA_DIR / "backup"
 SETTINGS_KEYS = ("night_strength", "night_hotkey", "neutral_hotkey", "cycle_hotkey", "overlay_hotkey", "map_hotkey",
-                 "map_interact_hotkey", "menu_hotkey", "map_auto", "map_alpha", "map_rect", "web_rect", "bookmarks", "tarkov_path", "toast", "base_rgb")      # ami a mentésbe/exportba kerül
+                 "map_interact_hotkey", "menu_hotkey", "map_auto", "map_alpha", "map_rect", "map_last", "map_learned", "web_rect", "bookmarks", "tarkov_path", "toast", "base_rgb")      # ami a mentésbe/exportba kerül
 
 
 def auto_backup():

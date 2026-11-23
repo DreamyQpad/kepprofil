@@ -6,7 +6,7 @@ kilépéskor visszaáll az alaphelyzet. Kézzel is váltható tálcamenüből va
 
 Eredetileg két, kézzel összerakott szkriptből (Linuxos KDE-panel, majd PowerShell-es változat) nőtt egy közös programmá.
 
-**Állapot (v2.24):** Windows 11-en és Linuxon (KDE Plasma Wayland) is használatra kész; a Linuxos változat valódi gépen
+**Állapot (v2.27):** Windows 11-en és Linuxon (KDE Plasma Wayland) is használatra kész; a Linuxos változat valódi gépen
 tesztelve, működik – lásd [LINUX.md](LINUX.md).
 
 ## Mit tud
@@ -23,7 +23,8 @@ tesztelve, működik – lásd [LINUX.md](LINUX.md).
   (betöltéskor előkészíti, a raid indulásakor megnyitja, a raid végén bezárja), és a tarkov.dev interaktív térképét mutatja
   a játék fölött. Három mód (Program fül, két gyorsgomb): **pillantás** (áttetsző, átkattintható, a játék megtartja a fókuszt),
   **billentyűzet** (←↑↓→ mozgat, numpad + és − nagyít, PageUp/PageDown az átlátszóságot állítja, Esc kilép; ekkor ezek a gombok nem jutnak el a játékhoz), **egér**
-  (az ablak fókuszt kap, mozgatható, kattintható; az Esc elrejti a térképet; kilépéskor a játék visszakapja a fókuszt, a hely megmarad). Az átlátszóság
+  (az ablak fókuszt kap, mozgatható, kattintható; az Esc elrejti a térképet; kilépéskor a játék visszakapja a fókuszt, a hely megmarad). Ha a program nem tudja, melyik pályán vagy, a gyorsgomb egér módban nyitja a legutóbb választott (vagy az első) térképet, és a térkép tetején lévő
+  **pályaválasztóval** kézzel választhatsz; a program megtanulja a raidben látott ismeretlen pályanevet (a `map_learned` beállításba menti), így legközelebb magától felismeri; az ismeretlen pályánál a régi raid térképét nem mutatja. A megtanult neveket a Program fülön listázza, és egy gombbal törölhetők. Az átlátszóság
   és az automatikus megnyitás állítható. A térkép külön folyamat (`--map`, pywebview + WebView2), nem injektál a játékba.
 - **Főmenü és böngésző (csak Windows)**: egy gyorsgombbal (alapból **Shift+Tab**, a Program fülön átállítható) a játék fölé
   jön a menü: **Térkép**, **Böngésző**, **Képbeállítások** (a profil-overlay). Kattintható, és ↑↓ / Enter / Esc is működik; a
